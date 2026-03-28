@@ -1,0 +1,9 @@
+{
+  "recommendations": [
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "huacnlee.autocorrect",
+    "ms-playwright.playwright",
+    "unifiedjs.vscode-mdx"
+  ]
+}
