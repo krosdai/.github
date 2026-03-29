@@ -1,0 +1,74 @@
+name: Code Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, synchronize]
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.event.pull_request &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Request Copilot review
+        run: |
+          gh pr edit "$PR_NUMBER" -R "$REPO" --add-reviewer @copilot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            ## Handle Previous Review Comments
+
+            Before starting your review, check for and resolve your own previous comments:
+
+            1. Get all previous top-level inline review comments from claude[bot] (exclude replies):
+               `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments --paginate --jq '[.[] | select(.user.login == "claude[bot]" and .in_reply_to_id == null)]'`
+            2. Get the current diff: `gh pr diff ${{ github.event.pull_request.number }}`
+            3. For each previous comment:
+               - Read the CURRENT version of the file at the commented line
+               - If FIXED: reply "Fixed. {brief description}" and resolve the thread
+               - If STILL EXISTS: reply noting it persists, do NOT create a duplicate inline comment
+               - If PARTIALLY FIXED: reply explaining what remains
+            4. Only create NEW inline comments for genuinely new issues not already covered.
+            5. To resolve fixed comment threads:
+               a. Query review thread IDs via GraphQL (paginated, all comments per thread):
+                  `gh api graphql --paginate -f query='query($endCursor:String){ repository(owner:"${{ github.repository_owner }}", name:"${{ github.event.repository.name }}") { pullRequest(number:${{ github.event.pull_request.number }}) { reviewThreads(first:100, after:$endCursor) { pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:100) { nodes { databaseId body } } } } } } }'`
+               b. Match each fixed comment's databaseId to find the thread node ID
+               c. Resolve: `gh api graphql -f query='mutation { resolveReviewThread(input:{threadId:"THREAD_NODE_ID"}) { thread { isResolved } } }'`
+
+            ## Review Instructions
+
+            Review this pull request for code quality, correctness, and security.
+            Analyze the diff in the context of the full codebase.
+            Post your findings as review comments on the specific lines where issues are found.
+            Follow the guidelines in REVIEW.md if present.
+          claude_args: |
+            --model opus
+            --allowedTools "WebSearch,WebFetch,mcp__github_inline_comment__create_inline_comment,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git log:*),Bash(git blame:*),Bash(git diff:*),"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_CUSTOM_HEADERS: '{"anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"}'
