@@ -55,7 +55,7 @@ jobs:
             4. Only create NEW inline comments for genuinely new issues not already covered.
             5. To resolve fixed comment threads:
                a. Query review thread IDs via GraphQL (paginated, all comments per thread):
-                  `gh api graphql --paginate -f query='query($cursor:String){ repository(owner:"${{ github.repository_owner }}", name:"${{ github.event.repository.name }}") { pullRequest(number:${{ github.event.pull_request.number }}) { reviewThreads(first:100, after:$cursor) { pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:100) { nodes { databaseId body } } } } } } }'`
+                  `gh api graphql --paginate -f query='query($endCursor:String){ repository(owner:"${{ github.repository_owner }}", name:"${{ github.event.repository.name }}") { pullRequest(number:${{ github.event.pull_request.number }}) { reviewThreads(first:100, after:$endCursor) { pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:100) { nodes { databaseId body } } } } } } }'`
                b. Match each fixed comment's databaseId to find the thread node ID
                c. Resolve: `gh api graphql -f query='mutation { resolveReviewThread(input:{threadId:"THREAD_NODE_ID"}) { thread { isResolved } } }'`
 
