@@ -22,35 +22,36 @@ Unlike community health files, GitHub Actions workflows in the `.github` repo ar
 
 ### Claude Code Review
 
-Automated PR review powered by [claude-code-action](https://github.com/anthropics/claude-code-action). To use it in another repository, create `.github/workflows/code-review.yml`:
+Automated PR review powered by [claude-code-action](https://github.com/anthropics/claude-code-action) with GitHub Copilot co-review. To use it in another repository, create `.github/workflows/code-review.yml`:
 
 ```yaml
 name: Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    types: [opened, ready_for_review, reopened, synchronize]
 
 permissions:
+  actions: read
   contents: read
-  pull-requests: write
   id-token: write
+  issues: write
+  pull-requests: write
 
 jobs:
   review:
-    uses: xdanger/.github/.github/workflows/claude-code-review.yml@main
+    uses: xdanger/.github/.github/workflows/code-review.yml@main
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }} # optional, for proxies like LiteLLM
 ```
 
 Prerequisites:
 
 1. Install the [Claude GitHub App](https://github.com/apps/claude)
 2. Add `ANTHROPIC_API_KEY` to repository secrets (or organization secrets for all repos)
-3. (Optional) Add `ANTHROPIC_BASE_URL` if routing through a proxy like [LiteLLM](https://github.com/BerriAI/litellm)
+3. (Optional) Set `ANTHROPIC_BASE_URL` as a repository **variable** (not secret) if routing through a proxy like [LiteLLM](https://github.com/BerriAI/litellm)
 
-The workflow skips draft PRs, has a 15-minute timeout, and follows the review guidelines defined in [`REVIEW.md`](REVIEW.md).
+The workflow requests a Copilot co-review alongside Claude, skips draft PRs and fork PRs, has a 15-minute timeout, and follows the review guidelines defined in [`REVIEW.md`](REVIEW.md).
 
 ## Tooling
 
