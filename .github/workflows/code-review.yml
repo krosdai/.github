@@ -4,44 +4,81 @@ on:
   pull_request:
     types: [opened, ready_for_review, reopened, synchronize]
   workflow_call:
+    # Reusable callers must pass PR context explicitly because `github.event.pull_request`
+    # is not populated for `workflow_call` runs.
+    inputs:
+      pr_number:
+        description: Pull request number to review when called as a reusable workflow.
+        required: true
+        type: number
+      is_draft:
+        description: Whether the pull request is still a draft when called as a reusable workflow.
+        required: false
+        default: false
+        type: boolean
+      head_repo_full_name:
+        description: Head repository full name for same-repo validation.
+        required: false
+        type: string
     secrets:
       ANTHROPIC_API_KEY:
         required: true
 
 permissions:
+  # `actions: read` keeps Actions metadata readable for the running job.
   actions: read
+  # `contents: read` is required for checkout and for Claude to inspect repository files.
   contents: read
+  # `id-token: write` is required because `claude-code-action` requests an OIDC token internally.
   id-token: write
-  issues: write
+  # `pull-requests: write` is required to request the Copilot reviewer, post inline review
+  # comments, and resolve review threads via GraphQL.
   pull-requests: write
 
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number || github.run_id }}
+  # Use the PR number when available so repeated reviews for the same PR cancel older runs
+  # whether this workflow is triggered directly or via `workflow_call`.
+  group: claude-review-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   review:
     if: >-
-      github.event.pull_request &&
-      !github.event.pull_request.draft &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request &&
+        !github.event.pull_request.draft &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      ) || (
+        github.event_name == 'workflow_call' &&
+        inputs.pr_number &&
+        !inputs.is_draft &&
+        (
+          !inputs.head_repo_full_name ||
+          inputs.head_repo_full_name == github.repository
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Request Copilot review
+        # Copilot review is optional. Keep Claude review running if this request is unavailable.
+        continue-on-error: true
         run: |
           gh pr edit "$PR_NUMBER" -R "$REPO" --add-reviewer @copilot
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Support both direct PR-triggered runs and reusable workflow callers.
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
           REPO: ${{ github.repository }}
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          fetch-depth: 1
+          # Keep enough history for `git log` and `git blame` without cloning everything.
+          fetch-depth: 100
 
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@e69ec4d5e5868930cecb8da7360a51fa9c4de5d6 # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
@@ -50,8 +87,8 @@ jobs:
             Before starting your review, check for and resolve your own previous comments:
 
             1. Get all previous top-level inline review comments from claude[bot] (exclude replies):
-               `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments --paginate --jq '[.[] | select(.user.login == "claude[bot]" and .in_reply_to_id == null)]'`
-            2. Get the current diff: `gh pr diff ${{ github.event.pull_request.number }}`
+               `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number || inputs.pr_number }}/comments --paginate --jq '[.[] | select(.user.login == "claude[bot]" and .in_reply_to_id == null)]'`
+            2. Get the current diff: `gh pr diff ${{ github.event.pull_request.number || inputs.pr_number }}`
             3. For each previous comment:
                - Read the CURRENT version of the file at the commented line
                - If FIXED: reply "Fixed. {brief description}" and resolve the thread
@@ -60,7 +97,7 @@ jobs:
             4. Only create NEW inline comments for genuinely new issues not already covered.
             5. To resolve fixed comment threads:
                a. Query review thread IDs via GraphQL (paginated, all comments per thread):
-                  `gh api graphql --paginate -f query='query($endCursor:String){ repository(owner:"${{ github.repository_owner }}", name:"${{ github.event.repository.name }}") { pullRequest(number:${{ github.event.pull_request.number }}) { reviewThreads(first:100, after:$endCursor) { pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:100) { nodes { databaseId body } } } } } } }'`
+                  `gh api graphql --paginate -f query='query($endCursor:String){ repository(owner:"${{ github.repository_owner }}", name:"${{ github.event.repository.name }}") { pullRequest(number:${{ github.event.pull_request.number || inputs.pr_number }}) { reviewThreads(first:100, after:$endCursor) { pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:100) { nodes { databaseId body } } } } } } }'`
                b. Match each fixed comment's databaseId to find the thread node ID
                c. Resolve: `gh api graphql -f query='mutation { resolveReviewThread(input:{threadId:"THREAD_NODE_ID"}) { thread { isResolved } } }'`
 
@@ -68,11 +105,18 @@ jobs:
 
             Review this pull request for code quality, correctness, and security.
             Analyze the diff in the context of the full codebase.
-            Post your findings as review comments on the specific lines where issues are found.
+            Only report actionable findings that are specific and important.
+            Use these severity levels in each finding: P1 for blocking or high-risk issues, P2 for meaningful issues, P3 for minor issues.
+            Skip generated files, lockfiles, vendored code, and style-only nits unless they hide a real bug.
+            Keep the review concise: at most 10 findings total.
+            Post findings as inline review comments on the specific lines where issues are found.
             Follow the guidelines in REVIEW.md if present.
+          # Keep the tool surface narrow: inline comments, read-only PR/git inspection,
+          # plus `gh api` / `gh pr comment` for resolving previous review threads.
           claude_args: |
             --model opus
-            --allowedTools "Read,Glob,Grep,WebSearch,WebFetch,mcp__github_inline_comment__create_inline_comment,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git log:*),Bash(git blame:*),Bash(git diff:*),"
+            --max-turns 30
+            --allowedTools "Read,Glob,Grep,WebSearch,WebFetch,mcp__github_inline_comment__create_inline_comment,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git log:*),Bash(git blame:*),Bash(git diff:*)"
         env:
           GH_TOKEN: ${{ github.token }}
-          ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL || 'https://api.anthropic.com' }}
