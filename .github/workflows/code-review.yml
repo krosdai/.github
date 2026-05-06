@@ -106,7 +106,8 @@ jobs:
             Review this pull request for code quality, correctness, and security.
             Analyze the diff in the context of the full codebase.
             Only report actionable findings that are specific and important.
-            Use these severity levels in each finding: P1 for blocking or high-risk issues, P2 for meaningful issues, P3 for minor issues.
+            Use these severity levels in each finding: P1 for blocking or high-risk issues, P2 for meaningful issues.
+            Do not report minor issues (what would otherwise be P3) — skip them entirely rather than downgrading or reframing them as P2.
             Skip generated files, lockfiles, vendored code, and style-only nits unless they hide a real bug.
             Keep the review concise: at most 10 findings total.
             Post findings as inline review comments on the specific lines where issues are found.
