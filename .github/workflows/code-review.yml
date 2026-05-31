@@ -57,18 +57,10 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # Resolve the PR number once for both direct PR-triggered runs and reusable workflow callers.
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
     steps:
-      - name: Request Copilot review
-        # Copilot review is optional. Keep Claude review running if this request is unavailable.
-        continue-on-error: true
-        run: |
-          gh pr edit "$PR_NUMBER" -R "$REPO" --add-reviewer @copilot
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # Support both direct PR-triggered runs and reusable workflow callers.
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
-          REPO: ${{ github.repository }}
-
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
@@ -84,8 +76,8 @@ jobs:
             Before starting your review, check for and resolve your own previous comments:
 
             1. Get all previous top-level inline review comments from claude[bot] (exclude replies):
-               `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number || inputs.pr_number }}/comments --paginate --jq '[.[] | select(.user.login == "claude[bot]" and .in_reply_to_id == null)]'`
-            2. Get the current diff: `gh pr diff ${{ github.event.pull_request.number || inputs.pr_number }}`
+               `gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments --paginate --jq '[.[] | select(.user.login == "claude[bot]" and .in_reply_to_id == null)]'`
+            2. Get the current diff: `gh pr diff ${{ env.PR_NUMBER }}`
             3. For each previous comment:
                - Read the CURRENT version of the file at the commented line
                - If FIXED: reply "Fixed. {brief description}" and resolve the thread
@@ -94,7 +86,7 @@ jobs:
             4. Only create NEW inline comments for genuinely new issues not already covered.
             5. To resolve fixed comment threads:
                a. Query review thread IDs via GraphQL (paginated, all comments per thread):
-                  `gh api graphql --paginate -f query='query($endCursor:String){ repository(owner:"${{ github.repository_owner }}", name:"${{ github.event.repository.name }}") { pullRequest(number:${{ github.event.pull_request.number || inputs.pr_number }}) { reviewThreads(first:100, after:$endCursor) { pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:100) { nodes { databaseId body } } } } } } }'`
+                  `gh api graphql --paginate -f query='query($endCursor:String){ repository(owner:"${{ github.repository_owner }}", name:"${{ github.event.repository.name }}") { pullRequest(number:${{ env.PR_NUMBER }}) { reviewThreads(first:100, after:$endCursor) { pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:100) { nodes { databaseId body } } } } } } }'`
                b. Match each fixed comment's databaseId to find the thread node ID
                c. Resolve: `gh api graphql -f query='mutation { resolveReviewThread(input:{threadId:"THREAD_NODE_ID"}) { thread { isResolved } } }'`
 
