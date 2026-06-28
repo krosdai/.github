@@ -50,7 +50,6 @@ jobs:
         !github.event.pull_request.draft &&
         github.event.pull_request.head.repo.full_name == github.repository
       ) || (
-        github.event_name == 'workflow_call' &&
         inputs.pr_number &&
         !inputs.is_draft &&
         inputs.head_repo_full_name == github.repository
@@ -70,6 +69,10 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Force the action onto the job-scoped GITHUB_TOKEN (contents: read,
+          # pull-requests: write) instead of its default write-capable GitHub App
+          # token, so a prompt-injected PR can't reach write endpoints via Bash(gh api).
+          github_token: ${{ github.token }}
           prompt: |
             ## Handle Previous Review Comments
 
@@ -81,7 +84,7 @@ jobs:
             3. For each previous comment:
                - Read the CURRENT version of the file at the commented line
                - If FIXED: reply "Fixed. {brief description}" and resolve the thread
-               - If STILL EXISTS: reply noting it persists, do NOT create a duplicate inline comment
+               - If STILL EXISTS: leave the thread untouched — do NOT reply again and do NOT create a duplicate inline comment (avoid re-notifying on every synchronize)
                - If PARTIALLY FIXED: reply explaining what remains
             4. Only create NEW inline comments for genuinely new issues not already covered.
             5. To resolve fixed comment threads:
@@ -104,9 +107,9 @@ jobs:
           # Keep the tool surface narrow: inline comments, read-only PR/git inspection,
           # plus `gh api` / `gh pr comment` for resolving previous review threads.
           claude_args: |
-            --model opus
+            --model claude-opus-4-8
             --max-turns 300
-            --allowedTools "Read,Glob,Grep,WebSearch,WebFetch,mcp__github_inline_comment__create_inline_comment,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git log:*),Bash(git blame:*),Bash(git diff:*)"
+            --allowedTools "Read,Glob,Grep,WebSearch,WebFetch,mcp__github_inline_comment__create_inline_comment,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git log:*),Bash(git blame:*)"
         env:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL || 'https://api.anthropic.com' }}
