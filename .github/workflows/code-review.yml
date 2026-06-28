@@ -78,8 +78,8 @@ jobs:
 
             Before starting your review, check for and resolve your own previous comments:
 
-            1. Get all previous top-level inline review comments from github-actions[bot] (exclude replies):
-               `gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments --paginate --jq '[.[] | select(.user.login == "github-actions[bot]" and .in_reply_to_id == null)]'`
+            1. Get all previous top-level inline review comments authored by THIS workflow — `github-actions[bot]` comments that carry the `<!-- claude-code-review -->` marker (this excludes replies and other tools that share the `github-actions[bot]` token):
+               `gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments --paginate --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- claude-code-review -->")) and .in_reply_to_id == null)]'`
             2. Get the current diff: `gh pr diff ${{ env.PR_NUMBER }}`
             3. For each previous comment:
                - Read the CURRENT version of the file at the commented line
@@ -103,6 +103,7 @@ jobs:
             Skip generated files, lockfiles, vendored code, and style-only nits unless they hide a real bug.
             Keep the review concise: at most 10 findings total.
             Post findings as inline review comments on the specific lines where issues are found.
+            End every inline review comment you post with the hidden marker `<!-- claude-code-review -->` (invisible in rendered Markdown) so later runs can reliably tell your own comments apart from other `github-actions[bot]` automation.
             Follow the guidelines in REVIEW.md if present.
           # Keep the tool surface narrow: inline comments, read-only PR/git inspection,
           # plus `gh api` / `gh pr comment` for resolving previous review threads.
