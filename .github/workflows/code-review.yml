@@ -31,7 +31,7 @@ permissions:
   contents: read
   # `id-token: write` is required because `claude-code-action` requests an OIDC token internally.
   id-token: write
-  # `pull-requests: write` is required to request the Copilot reviewer, post inline review
+  # `pull-requests: write` is required to post inline review
   # comments, and resolve review threads via GraphQL.
   pull-requests: write
 
@@ -50,7 +50,6 @@ jobs:
         !github.event.pull_request.draft &&
         github.event.pull_request.head.repo.full_name == github.repository
       ) || (
-        github.event_name == 'workflow_call' &&
         inputs.pr_number &&
         !inputs.is_draft &&
         inputs.head_repo_full_name == github.repository
@@ -70,18 +69,22 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Force the action onto the job-scoped GITHUB_TOKEN (contents: read,
+          # pull-requests: write) instead of its default write-capable GitHub App
+          # token, so a prompt-injected PR can't reach write endpoints via Bash(gh api).
+          github_token: ${{ github.token }}
           prompt: |
             ## Handle Previous Review Comments
 
             Before starting your review, check for and resolve your own previous comments:
 
-            1. Get all previous top-level inline review comments from claude[bot] (exclude replies):
-               `gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments --paginate --jq '[.[] | select(.user.login == "claude[bot]" and .in_reply_to_id == null)]'`
+            1. Get all previous top-level inline review comments authored by THIS workflow — `github-actions[bot]` comments that carry the `<!-- claude-code-review -->` marker (this excludes replies and other tools that share the `github-actions[bot]` token):
+               `gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments --paginate --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- claude-code-review -->")) and .in_reply_to_id == null)]'`
             2. Get the current diff: `gh pr diff ${{ env.PR_NUMBER }}`
             3. For each previous comment:
                - Read the CURRENT version of the file at the commented line
                - If FIXED: reply "Fixed. {brief description}" and resolve the thread
-               - If STILL EXISTS: reply noting it persists, do NOT create a duplicate inline comment
+               - If STILL EXISTS: leave the thread untouched — do NOT reply again and do NOT create a duplicate inline comment (avoid re-notifying on every synchronize)
                - If PARTIALLY FIXED: reply explaining what remains
             4. Only create NEW inline comments for genuinely new issues not already covered.
             5. To resolve fixed comment threads:
@@ -100,13 +103,14 @@ jobs:
             Skip generated files, lockfiles, vendored code, and style-only nits unless they hide a real bug.
             Keep the review concise: at most 10 findings total.
             Post findings as inline review comments on the specific lines where issues are found.
+            End every inline review comment you post with the hidden marker `<!-- claude-code-review -->` (invisible in rendered Markdown) so later runs can reliably tell your own comments apart from other `github-actions[bot]` automation.
             Follow the guidelines in REVIEW.md if present.
           # Keep the tool surface narrow: inline comments, read-only PR/git inspection,
           # plus `gh api` / `gh pr comment` for resolving previous review threads.
           claude_args: |
-            --model opus
+            --model claude-opus-4-8
             --max-turns 300
-            --allowedTools "Read,Glob,Grep,WebSearch,WebFetch,mcp__github_inline_comment__create_inline_comment,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git log:*),Bash(git blame:*),Bash(git diff:*)"
+            --allowedTools "Read,Glob,Grep,WebSearch,WebFetch,mcp__github_inline_comment__create_inline_comment,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git log:*),Bash(git blame:*)"
         env:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL || 'https://api.anthropic.com' }}
