@@ -36,9 +36,10 @@ permissions:
   pull-requests: write
 
 concurrency:
-  # Use the PR number when available so repeated reviews for the same PR cancel older runs
-  # whether this workflow is triggered directly or via `workflow_call`.
-  group: claude-review-${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
+  # Key only on repo + PR number (not github.event_name) so direct pull_request runs and
+  # reusable workflow_call runs for the SAME PR share one group and cancel each other,
+  # instead of racing and double-posting comments.
+  group: claude-review-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -63,6 +64,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          # Direct pull_request runs: github.ref is already refs/pull/<n>/merge.
+          # Reusable workflow_call runs (from a dispatch/schedule wrapper) have no PR
+          # event ref, so explicitly check out the target PR's merge ref — otherwise
+          # Read/Grep/git blame would inspect the caller's default branch, not the PR.
+          ref: ${{ inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || github.ref }}
           # Keep enough history for `git log` and `git blame` without cloning everything.
           fetch-depth: 100
 
@@ -81,7 +87,7 @@ jobs:
             1. Get all previous top-level inline review comments authored by THIS workflow — `github-actions[bot]` comments that carry the `<!-- claude-code-review -->` marker (this excludes replies and other tools that share the `github-actions[bot]` token):
                `gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments --paginate --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- claude-code-review -->")) and .in_reply_to_id == null)]'`
             2. Get the current diff: `gh pr diff ${{ env.PR_NUMBER }}`
-            3. For each previous comment:
+            3. Determine which previous comments still need handling: run the step-5 GraphQL query to get each thread's `isResolved`, and SKIP every comment whose thread is already resolved (it was fixed and closed in an earlier run — never reply to it again). For each previous comment on a STILL-UNRESOLVED thread:
                - Read the CURRENT version of the file at the commented line
                - If FIXED: reply "Fixed. {brief description}" and resolve the thread
                - If STILL EXISTS: leave the thread untouched — do NOT reply again and do NOT create a duplicate inline comment (avoid re-notifying on every synchronize)
