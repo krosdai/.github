@@ -31,7 +31,7 @@ permissions:
   contents: read
   # `id-token: write` is required because `claude-code-action` requests an OIDC token internally.
   id-token: write
-  # `pull-requests: write` is required to request the Copilot reviewer, post inline review
+  # `pull-requests: write` is required to post inline review
   # comments, and resolve review threads via GraphQL.
   pull-requests: write
 
@@ -75,8 +75,8 @@ jobs:
 
             Before starting your review, check for and resolve your own previous comments:
 
-            1. Get all previous top-level inline review comments from claude[bot] (exclude replies):
-               `gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments --paginate --jq '[.[] | select(.user.login == "claude[bot]" and .in_reply_to_id == null)]'`
+            1. Get all previous top-level inline review comments from github-actions[bot] (exclude replies):
+               `gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments --paginate --jq '[.[] | select(.user.login == "github-actions[bot]" and .in_reply_to_id == null)]'`
             2. Get the current diff: `gh pr diff ${{ env.PR_NUMBER }}`
             3. For each previous comment:
                - Read the CURRENT version of the file at the commented line
