@@ -40,7 +40,7 @@ permissions:
 
 jobs:
   review:
-    uses: xdanger/.github/.github/workflows/code-review.yml@main
+    uses: xdanger/.github/.github/workflows/code-review.yml@v1
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
