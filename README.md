@@ -72,7 +72,15 @@ Two separate things have to be right, and only one of them lives in this repo.
 
 Passing an empty string does _not_ disable bot reviews — GitHub expressions treat `''` as falsy, so it falls through to the default. Gate the job in your calling workflow instead.
 
-The other half is a GitHub platform behavior that no workflow change can work around: **Dependabot-triggered runs read secrets from the Dependabot store, not the Actions store.** A key that only exists as an Actions secret arrives as an empty string, and the review fails on an unauthenticated API call rather than anything obviously secret-related. Look for `Secret source: Dependabot` in the run log. Add the key to both stores:
+The other half is a GitHub platform behavior that no workflow change can work around: **Dependabot-triggered runs read secrets from the Dependabot store, not the Actions store.** A key that only exists as an Actions secret arrives as an empty string, and the run dies with:
+
+```
+Environment variable validation failed:
+  - Either ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or workload identity
+    federation (...) is required when using direct Anthropic API.
+```
+
+which reads as though the secret was never configured at all. Confirm the real cause with `Secret source: Dependabot` in the run log, then add the key to both stores:
 
 ```sh
 gh secret set ANTHROPIC_API_KEY --org krosdai --app actions    --visibility all
