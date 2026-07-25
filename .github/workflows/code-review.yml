@@ -20,6 +20,11 @@ on:
         description: Head repository full name for same-repo validation. Required so the same-repo check fails closed when callers forget to pass it.
         required: true
         type: string
+      allowed_bots:
+        description: Comma-separated bot logins allowed to trigger a review, or '*' for every bot. `claude-code-action` rejects bot-authored PRs unless they are listed here.
+        required: false
+        default: dependabot[bot]
+        type: string
     secrets:
       ANTHROPIC_API_KEY:
         required: true
@@ -60,6 +65,18 @@ jobs:
     env:
       # Resolve the PR number once for both direct PR-triggered runs and reusable workflow callers.
       PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+      # `claude-code-action` aborts on any non-User actor unless it is allow-listed, so
+      # without this every Dependabot PR fails the review job. Repeats the input's default
+      # because direct PR-triggered runs have no `inputs` context to read it from.
+      #
+      # Allow-listing Dependabot is safe here: the same-repo check above already limits
+      # reviews to branches inside this repository, which forks and outside contributors
+      # cannot push to. The reviewer prompt is fixed in this file, never caller-supplied.
+      #
+      # To review no bots at all, gate the job in the calling workflow — passing an empty
+      # string does not work, because GitHub expressions treat '' as falsy and fall through
+      # to the default below.
+      ALLOWED_BOTS: ${{ inputs.allowed_bots || 'dependabot[bot]' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -75,6 +92,7 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          allowed_bots: ${{ env.ALLOWED_BOTS }}
           # Force the action onto the job-scoped GITHUB_TOKEN (contents: read,
           # pull-requests: write) instead of its default write-capable GitHub App
           # token, so a prompt-injected PR can't reach write endpoints via Bash(gh api).
