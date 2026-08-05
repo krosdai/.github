@@ -117,18 +117,11 @@ jobs:
                b. Match each fixed comment's databaseId to find the thread node ID
                c. Resolve: `gh api graphql -f query='mutation { resolveReviewThread(input:{threadId:"THREAD_NODE_ID"}) { thread { isResolved } } }'`
 
-            ## Review Instructions
+            ## Review Execution Protocol
 
-            Review this pull request for code quality, correctness, and security.
-            Analyze the diff in the context of the full codebase.
-            Only report actionable findings that are specific and important.
-            Use these severity levels in each finding: P1 for blocking or high-risk issues, P2 for meaningful issues.
-            Do not report minor issues (what would otherwise be P3) — skip them entirely rather than downgrading or reframing them as P2.
-            Skip generated files, lockfiles, vendored code, and style-only nits unless they hide a real bug.
-            Keep the review concise: at most 10 findings total.
+            Before reviewing, read `REVIEW.md` completely and use it as the single source of truth for review scope, severity, and reporting policy.
             Post findings as inline review comments on the specific lines where issues are found.
             End every inline review comment you post with the hidden marker `<!-- claude-code-review -->` (invisible in rendered Markdown) so later runs can reliably tell your own comments apart from other `github-actions[bot]` automation.
-            Follow the guidelines in REVIEW.md if present.
           # Keep the tool surface narrow: inline comments, read-only PR/git inspection,
           # plus `gh api` / `gh pr comment` for resolving previous review threads.
           claude_args: |
