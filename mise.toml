@@ -1,5 +1,5 @@
 [tools]
-"ubi:huacnlee/autocorrect" = "2.14.0"
+"github:huacnlee/autocorrect" = "2.16"
 
 [settings]
 lockfile = true
