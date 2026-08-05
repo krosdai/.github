@@ -5,4 +5,13 @@ version = "2.14.0"
 backend = "ubi:huacnlee/autocorrect"
 
 [tools."ubi:huacnlee/autocorrect"."platforms.linux-arm64-autocorrect"]
-checksum = "blake3:5431e3e432850959539fdc896d508f4559e237f36783126ea37cfd2eb851d26e"
+checksum = "sha256:be736e28695fa645bb7b3cdfb5973462e9ecd4d556f16b0b28f93c68a7a593df"
+
+[tools."ubi:huacnlee/autocorrect"."platforms.linux-x64-autocorrect"]
+checksum = "sha256:52689f2627a7e5c7b79224021f75ee6fce93dc4059d5cc385f301153dbf2fdad"
+
+[tools."ubi:huacnlee/autocorrect"."platforms.macos-arm64-autocorrect"]
+checksum = "sha256:a5ee5460fc679b606477b6dcc67f771c6264089a1d52f3fef87c9f089c3f9f26"
+
+[tools."ubi:huacnlee/autocorrect"."platforms.macos-x64-autocorrect"]
+checksum = "sha256:4f5c2113e123989c7a09523eeb4e274a830a122d3538c775be8e1f603199f14c"
