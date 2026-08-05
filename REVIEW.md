@@ -20,6 +20,8 @@ this repository.
   or maintainability issue worth fixing, but without P0 or P1 impact
 - **P3 — Minor:** a low-impact improvement, nit, or preference
 
+Prefix every reported finding with its severity label (for example, `P1:`).
+
 For code findings, report only P0, P1, and P2 issues. Skip P3 issues entirely;
 never inflate or reframe a minor issue as P2 to make it reportable.
 
