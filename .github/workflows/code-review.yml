@@ -65,6 +65,9 @@ jobs:
     env:
       # Resolve the PR number once for both direct PR-triggered runs and reusable workflow callers.
       PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+      # Direct PR runs use the policy from the checked-out PR. Reusable runs load
+      # the policy from the exact commit that supplied this workflow below.
+      REVIEW_POLICY_PATH: ${{ inputs.pr_number && '.review-policy/REVIEW.md' || 'REVIEW.md' }}
       # `claude-code-action` aborts on any non-User actor unless it is allow-listed, so
       # without this every Dependabot PR fails the review job. Repeats the input's default
       # because direct PR-triggered runs have no `inputs` context to read it from.
@@ -88,6 +91,19 @@ jobs:
           ref: ${{ inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || github.ref }}
           # Keep enough history for `git log` and `git blame` without cloning everything.
           fetch-depth: 100
+
+      - name: Checkout canonical review policy
+        if: inputs.pr_number
+        uses: actions/checkout@v6
+        with:
+          # For a reusable job these values identify the repository and exact
+          # commit that supplied this workflow, rather than the caller.
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .review-policy
+          sparse-checkout: REVIEW.md
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - uses: anthropics/claude-code-action@v1
         with:
@@ -119,7 +135,7 @@ jobs:
 
             ## Review Execution Protocol
 
-            Before reviewing, read `REVIEW.md` completely and use it as the single source of truth for review scope, severity, and reporting policy.
+            Before reviewing, read `${{ env.REVIEW_POLICY_PATH }}` completely and use it as the single source of truth for review scope, severity, and reporting policy.
             Post findings as inline review comments on the specific lines where issues are found.
             End every inline review comment you post with the hidden marker `<!-- claude-code-review -->` (invisible in rendered Markdown) so later runs can reliably tell your own comments apart from other `github-actions[bot]` automation.
           # Keep the tool surface narrow: inline comments, read-only PR/git inspection,
