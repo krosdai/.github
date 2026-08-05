@@ -4,7 +4,7 @@
     "node": ">=22.22.1"
   },
   "scripts": {
-    "format": "prettier --write --ignore-unknown --log-level=warn . && autocorrect --fix .",
+    "format": "prettier --write --ignore-unknown --log-level=warn . && mise exec -- autocorrect --fix .",
     "lint": "eslint . --no-error-on-unmatched-pattern && pnpm run --filter '*' lint && prettier --check --ignore-unknown .",
     "lint:staged": "lint-staged",
     "lint:fix": "eslint . --no-error-on-unmatched-pattern --fix && pnpm run --filter '*' lint:fix && pnpm run format",
