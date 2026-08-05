@@ -91,6 +91,9 @@ Repository **variables** such as `ANTHROPIC_BASE_URL` are not partitioned this w
 
 ## Tooling
 
+Run `mise install` after checkout to install the native AutoCorrect CLI used by
+formatting and pre-commit hooks.
+
 - **Formatting**: `pnpm run format` — Prettier for JS/TS, AutoCorrect for CJK text spacing
 - **Linting**: `pnpm run lint` — ESLint for JS/TS
 - **Git hooks**: Husky + lint-staged for pre-commit checks

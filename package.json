@@ -12,7 +12,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "autocorrect-node": "^2.14.0",
     "eslint": "^10.4.1",
     "globals": "^17.6.0",
     "husky": "^9.1.7",
