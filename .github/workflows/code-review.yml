@@ -105,6 +105,14 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      - name: Verify review policy is present
+        shell: bash
+        run: |
+          if [[ ! -f "$REVIEW_POLICY_PATH" ]]; then
+            echo "::error::Review policy not found at $REVIEW_POLICY_PATH"
+            exit 1
+          fi
+
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
