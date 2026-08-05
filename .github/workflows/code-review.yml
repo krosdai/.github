@@ -65,6 +65,9 @@ jobs:
     env:
       # Resolve the PR number once for both direct PR-triggered runs and reusable workflow callers.
       PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+      # Direct PR runs use the policy from the checked-out PR. Reusable runs load
+      # the policy from the exact commit that supplied this workflow below.
+      REVIEW_POLICY_PATH: ${{ inputs.pr_number && '.review-policy/REVIEW.md' || 'REVIEW.md' }}
       # `claude-code-action` aborts on any non-User actor unless it is allow-listed, so
       # without this every Dependabot PR fails the review job. Repeats the input's default
       # because direct PR-triggered runs have no `inputs` context to read it from.
@@ -88,6 +91,27 @@ jobs:
           ref: ${{ inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || github.ref }}
           # Keep enough history for `git log` and `git blame` without cloning everything.
           fetch-depth: 100
+
+      - name: Checkout canonical review policy
+        if: inputs.pr_number
+        uses: actions/checkout@v6
+        with:
+          # For a reusable job these values identify the repository and exact
+          # commit that supplied this workflow, rather than the caller.
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .review-policy
+          sparse-checkout: REVIEW.md
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Verify review policy is present
+        shell: bash
+        run: |
+          if [[ ! -f "$REVIEW_POLICY_PATH" ]]; then
+            echo "::error::Review policy not found at $REVIEW_POLICY_PATH"
+            exit 1
+          fi
 
       - uses: anthropics/claude-code-action@v1
         with:
@@ -117,18 +141,11 @@ jobs:
                b. Match each fixed comment's databaseId to find the thread node ID
                c. Resolve: `gh api graphql -f query='mutation { resolveReviewThread(input:{threadId:"THREAD_NODE_ID"}) { thread { isResolved } } }'`
 
-            ## Review Instructions
+            ## Review Execution Protocol
 
-            Review this pull request for code quality, correctness, and security.
-            Analyze the diff in the context of the full codebase.
-            Only report actionable findings that are specific and important.
-            Use these severity levels in each finding: P1 for blocking or high-risk issues, P2 for meaningful issues.
-            Do not report minor issues (what would otherwise be P3) — skip them entirely rather than downgrading or reframing them as P2.
-            Skip generated files, lockfiles, vendored code, and style-only nits unless they hide a real bug.
-            Keep the review concise: at most 10 findings total.
+            Before reviewing, read `${{ env.REVIEW_POLICY_PATH }}` completely and use it as the single source of truth for review scope, severity, and reporting policy.
             Post findings as inline review comments on the specific lines where issues are found.
             End every inline review comment you post with the hidden marker `<!-- claude-code-review -->` (invisible in rendered Markdown) so later runs can reliably tell your own comments apart from other `github-actions[bot]` automation.
-            Follow the guidelines in REVIEW.md if present.
           # Keep the tool surface narrow: inline comments, read-only PR/git inspection,
           # plus `gh api` / `gh pr comment` for resolving previous review threads.
           claude_args: |

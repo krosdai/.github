@@ -1,0 +1,5 @@
+[tools]
+"github:huacnlee/autocorrect" = "2.16"
+
+[settings]
+lockfile = true
