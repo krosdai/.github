@@ -69,7 +69,9 @@ jobs:
       # the default policy from the exact commit that supplied this workflow below,
       # while allowing the downstream repository's base-branch REVIEW.md to override it.
       DEFAULT_REVIEW_POLICY_PATH: ${{ inputs.pr_number && '.review-policy/REVIEW.md' || 'REVIEW.md' }}
-      REPOSITORY_REVIEW_POLICY_PATH: ${{ inputs.pr_number && '.repository-policy/REVIEW.md' || '' }}
+      # Keep the optional policy under the canonical checkout, which is recreated
+      # before loading it so the PR checkout cannot pre-seed this trusted path.
+      REPOSITORY_REVIEW_POLICY_PATH: ${{ inputs.pr_number && '.review-policy/repository/REVIEW.md' || '' }}
       # `claude-code-action` aborts on any non-User actor unless it is allow-listed, so
       # without this every Dependabot PR fails the review job. Repeats the input's default
       # because direct PR-triggered runs have no `inputs` context to read it from.
@@ -129,8 +131,8 @@ jobs:
             echo "::warning::Downstream REVIEW.md was not found or unavailable; using the default review policy only"
             exit 0
           fi
-          mkdir -p .repository-policy
-          mv "$policy_file" .repository-policy/REVIEW.md
+          mkdir -p .review-policy/repository
+          mv "$policy_file" "$REPOSITORY_REVIEW_POLICY_PATH"
 
       - name: Verify review policy is present
         shell: bash
