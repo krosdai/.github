@@ -66,8 +66,10 @@ jobs:
       # Resolve the PR number once for both direct PR-triggered runs and reusable workflow callers.
       PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
       # Direct PR runs use the policy from the checked-out PR. Reusable runs load
-      # the policy from the exact commit that supplied this workflow below.
-      REVIEW_POLICY_PATH: ${{ inputs.pr_number && '.review-policy/REVIEW.md' || 'REVIEW.md' }}
+      # the default policy from the exact commit that supplied this workflow below,
+      # while allowing the downstream repository's REVIEW.md to override it.
+      DEFAULT_REVIEW_POLICY_PATH: ${{ inputs.pr_number && '.review-policy/REVIEW.md' || 'REVIEW.md' }}
+      REPOSITORY_REVIEW_POLICY_PATH: REVIEW.md
       # `claude-code-action` aborts on any non-User actor unless it is allow-listed, so
       # without this every Dependabot PR fails the review job. Repeats the input's default
       # because direct PR-triggered runs have no `inputs` context to read it from.
@@ -108,8 +110,8 @@ jobs:
       - name: Verify review policy is present
         shell: bash
         run: |
-          if [[ ! -f "$REVIEW_POLICY_PATH" ]]; then
-            echo "::error::Review policy not found at $REVIEW_POLICY_PATH"
+          if [[ ! -f "$DEFAULT_REVIEW_POLICY_PATH" ]]; then
+            echo "::error::Default review policy not found at $DEFAULT_REVIEW_POLICY_PATH"
             exit 1
           fi
 
@@ -143,7 +145,8 @@ jobs:
 
             ## Review Execution Protocol
 
-            Before reviewing, read `${{ env.REVIEW_POLICY_PATH }}` completely and use it as the single source of truth for review scope, severity, and reporting policy.
+            Before reviewing, read `${{ env.DEFAULT_REVIEW_POLICY_PATH }}` completely as the default review policy.
+            If `${{ env.REPOSITORY_REVIEW_POLICY_PATH }}` exists and is a different file, read it completely as the downstream repository's policy. Its rules take precedence wherever the two policies conflict; apply the default policy only for matters the repository policy does not address.
             Post findings as inline review comments on the specific lines where issues are found.
             End every inline review comment you post with the hidden marker `<!-- claude-code-review -->` (invisible in rendered Markdown) so later runs can reliably tell your own comments apart from other `github-actions[bot]` automation.
           # Keep the tool surface narrow: inline comments, read-only PR/git inspection,
