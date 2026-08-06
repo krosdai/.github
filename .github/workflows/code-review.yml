@@ -108,9 +108,8 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      - name: Resolve downstream policy revision
+      - name: Load downstream review policy
         if: inputs.pr_number
-        id: downstream-policy
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -123,31 +122,15 @@ jobs:
             echo "::warning::PR base commit was invalid; using the default review policy only"
             exit 0
           fi
-          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout downstream review policy
-        if: inputs.pr_number && steps.downstream-policy.outputs.base_sha
-        id: checkout-downstream-policy
-        continue-on-error: true
-        uses: actions/checkout@v6
-        with:
-          # Read repository-specific rules from the trusted base revision so a PR
-          # cannot weaken the policy governing its own review.
-          repository: ${{ github.repository }}
-          ref: ${{ steps.downstream-policy.outputs.base_sha }}
-          path: .repository-policy
-          sparse-checkout: REVIEW.md
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - name: Quarantine incomplete downstream policy
-        if: inputs.pr_number && steps.checkout-downstream-policy.outcome == 'failure'
-        shell: bash
-        run: |
-          if [[ -e .repository-policy ]]; then
-            mv .repository-policy "$RUNNER_TEMP/repository-policy.failed"
+          policy_file="$RUNNER_TEMP/repository-review-policy"
+          if ! gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/$GITHUB_REPOSITORY/contents/REVIEW.md?ref=$base_sha" > "$policy_file"; then
+            echo "::warning::Downstream REVIEW.md was not found or unavailable; using the default review policy only"
+            exit 0
           fi
-          echo "::warning::Could not check out the downstream review policy; using the default policy only"
+          mkdir -p .repository-policy
+          mv "$policy_file" .repository-policy/REVIEW.md
 
       - name: Verify review policy is present
         shell: bash
