@@ -115,15 +115,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          base_sha="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.base.sha')"
+          if ! base_sha="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.base.sha')"; then
+            echo "::warning::Could not resolve the PR base commit; using the default review policy only"
+            exit 0
+          fi
           if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Could not resolve a valid PR base commit"
-            exit 1
+            echo "::warning::PR base commit was invalid; using the default review policy only"
+            exit 0
           fi
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
 
       - name: Checkout downstream review policy
-        if: inputs.pr_number
+        if: inputs.pr_number && steps.downstream-policy.outputs.base_sha
+        id: checkout-downstream-policy
+        continue-on-error: true
         uses: actions/checkout@v6
         with:
           # Read repository-specific rules from the trusted base revision so a PR
@@ -135,12 +140,27 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      - name: Quarantine incomplete downstream policy
+        if: inputs.pr_number && steps.checkout-downstream-policy.outcome == 'failure'
+        shell: bash
+        run: |
+          if [[ -e .repository-policy ]]; then
+            mv .repository-policy "$RUNNER_TEMP/repository-policy.failed"
+          fi
+          echo "::warning::Could not check out the downstream review policy; using the default policy only"
+
       - name: Verify review policy is present
         shell: bash
         run: |
           if [[ ! -f "$DEFAULT_REVIEW_POLICY_PATH" ]]; then
             echo "::error::Default review policy not found at $DEFAULT_REVIEW_POLICY_PATH"
             exit 1
+          fi
+          echo "Default review policy: $DEFAULT_REVIEW_POLICY_PATH"
+          if [[ -n "$REPOSITORY_REVIEW_POLICY_PATH" && -f "$REPOSITORY_REVIEW_POLICY_PATH" ]]; then
+            echo "Repository review policy: $REPOSITORY_REVIEW_POLICY_PATH (pinned to the PR base commit)"
+          else
+            echo "Repository review policy: none; using the default policy only"
           fi
 
       - uses: anthropics/claude-code-action@v1
