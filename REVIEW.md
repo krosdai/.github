@@ -31,6 +31,23 @@ including minor inaccuracies, incomplete detail, wording, tone, or style. This
 higher threshold prevents documentation review from blocking CI convergence on
 non-critical details.
 
+## Inline vs digest
+
+Inline review comments are reserved for P0, P1, and P2 findings that are
+objective, in-scope defects with a concrete fix. Advisory P2 material —
+hardening ideas, refactoring suggestions, observations outside the PR's stated
+scope — belongs only in the advisory digest of the review state comment, never
+in an inline comment.
+
+## Re-review convergence
+
+The first review of a PR covers the full diff. Every later run is incremental:
+it reviews only the changes pushed since the last reviewed commit, verifies
+earlier findings, and must not re-raise any finding already recorded in the
+ledger — fixed, rejected, or still open — even reworded or anchored to a
+different location. A finding the author has rejected with a stated reason is
+settled; re-raising it is itself a review defect.
+
 ## Always check
 
 - Logic errors, off-by-one bugs, and incorrect boundary conditions
