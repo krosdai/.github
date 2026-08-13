@@ -194,9 +194,9 @@ jobs:
                           $comments[1:][]
                           | select(.author.login == "github-actions")
                           | if (.body | startswith("Fixed.")) then
-                              "Fixed."
+                              {state: "fixed", detail: .body[:500]}
                             elif (.body | startswith("Partially fixed.")) then
-                              "Partially fixed."
+                              {state: "partially-fixed", detail: .body[:500]}
                             else
                               empty
                             end
@@ -282,10 +282,10 @@ jobs:
                - If `commentsLimitReached` is true, leave the thread untouched for a maintainer; automatic handling intentionally stops at 100 comments
                - If `top.line` is non-null, inspect the current file around that line and verify the construct named by the finding
                - If `top.line` is null, the comment is outdated and `top.originalLine` is stale. Use `top.diffHunk`, the finding body, and repository search to locate the referenced construct in the current code. Reply "Fixed." only when semantic evidence shows the concern is gone; if uncertain, leave the thread untouched
-               - If `workflowReplies` already contains "Fixed.", leave the thread untouched — it is waiting for maintainer resolution
+               - If `workflowReplies` contains `state: "fixed"`, leave the thread untouched — it is waiting for maintainer resolution
                - If FIXED: run `/tmp/code-review-api.sh reply THREAD_ID 'Fixed. {brief description}'`; do not attempt to resolve the thread because the hardened workflow token cannot do so
                - If STILL EXISTS: leave the thread untouched — do NOT reply again and do NOT create a duplicate inline comment (avoid re-notifying on every synchronize)
-               - If PARTIALLY FIXED: reply once with `/tmp/code-review-api.sh reply`; do not repeat an equivalent reply on later runs
+               - If PARTIALLY FIXED: compare the remaining concern with existing `state: "partially-fixed"` reply details. Reply once with `/tmp/code-review-api.sh reply THREAD_ID 'Partially fixed. {what remains}'` only when the remaining concern is materially different; do not repeat an equivalent update
             4. Only create NEW inline comments for genuinely new issues not already covered.
 
             ## Review Execution Protocol
