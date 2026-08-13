@@ -160,14 +160,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           hook_path="$RUNNER_TEMP/stamp-review-comment.sh"
-          review_api_path="/tmp/code-review-api.sh"
+          review_query_path="/tmp/code-review-threads.sh"
           cat > "$hook_path" <<'HOOK'
           #!/usr/bin/env bash
           set -euo pipefail
 
           readonly footer="${1:?review footer argument required}"
+          readonly review_query="${2:?review query path required}"
 
-          jq --arg footer "$footer" '
+          jq --arg footer "$footer" --arg review_query "$review_query" '
             if .tool_name == "mcp__github_inline_comment__create_inline_comment" then
               .tool_input as $input
               | ($input.body // "") as $body
@@ -190,169 +191,114 @@ jobs:
                     )
                   }
                 }
+            elif .tool_name == "Bash" then
+              (.tool_input.command // "") as $command
+              | if $command == $review_query then
+                  empty
+                elif ($command | startswith($review_query)) then
+                  {
+                    hookSpecificOutput: {
+                      hookEventName: "PreToolUse",
+                      permissionDecision: "deny",
+                      permissionDecisionReason: "The review thread query accepts no arguments or trailing shell syntax."
+                    }
+                  }
+                elif ($command | test("[;&|<>`\\r\\n]|\\$\\(")) then
+                  {
+                    hookSpecificOutput: {
+                      hookEventName: "PreToolUse",
+                      permissionDecision: "deny",
+                      permissionDecisionReason: "Shell chaining, substitution, and redirection are not allowed during review."
+                    }
+                  }
+                else
+                  empty
+                end
             end
           '
           HOOK
 
-          cat > "$review_api_path" <<'REVIEW_API'
+          cat > "$review_query_path" <<'REVIEW_QUERY'
           #!/usr/bin/env bash
           set -euo pipefail
 
-          query_threads() {
-            gh api graphql \
-              --paginate \
-              -f owner="$GITHUB_REPOSITORY_OWNER" \
-              -f name="${GITHUB_REPOSITORY#*/}" \
-              -F number="$PR_NUMBER" \
-              -f query='query($owner:String!, $name:String!, $number:Int!, $endCursor:String) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { reviewThreads(first:100, after:$endCursor) { pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:100) { nodes { databaseId body path line originalLine diffHunk author { login } } } } } } } }' |
-              jq -cs \
-                --arg footer "$REVIEW_FOOTER" \
-                --arg legacy "$LEGACY_REVIEW_MARKER" '
-                  def ends_with_marker($marker):
-                    sub("[\\r\\n]+$"; "")
-                    | . == $marker or endswith("\n" + $marker);
+          if [[ $# -ne 0 ]]; then
+            echo "usage: $0" >&2
+            exit 2
+          fi
 
-                  [
-                    .[].data.repository.pullRequest.reviewThreads.nodes[]
-                    | .comments.nodes as $comments
-                    | $comments[0] as $top
-                    | select($top.author.login == "github-actions")
-                    | select(
-                        $top.body
-                        | (ends_with_marker($footer) or ends_with_marker($legacy))
-                      )
-                    | if .isResolved then
-                        {
-                          id,
-                          isResolved,
-                          top: {
-                            body: $top.body[:500],
-                            path: $top.path,
-                            line: $top.line,
-                            originalLine: $top.originalLine
-                          }
-                        }
-                      else
-                        {
-                          id,
-                          isResolved,
-                          commentsLimitReached: ($comments | length == 100),
-                          top: {
-                            databaseId: $top.databaseId,
-                            body: $top.body[:4000],
-                            path: $top.path,
-                            line: $top.line,
-                            originalLine: $top.originalLine,
-                            diffHunk: ($top.diffHunk // "")[:4000]
-                          },
-                          workflowReplies: [
-                            $comments[1:][]
-                            | select(.author.login == "github-actions")
-                            | select(.body | ends_with_marker($footer))
-                            | (.body | sub("[\\r\\n]+$"; "") | rtrimstr("\n\n" + $footer)) as $reply
-                            | if ($reply | startswith("Fixed.")) then
-                                {state: "fixed", detail: $reply}
-                              elif ($reply | startswith("Partially fixed.")) then
-                                {state: "partially-fixed", detail: $reply}
-                              else
-                                empty
-                              end
-                          ]
-                        }
-                      end
-                  ]
-                '
-          }
+          gh api graphql \
+            --paginate \
+            -f owner="$GITHUB_REPOSITORY_OWNER" \
+            -f name="${GITHUB_REPOSITORY#*/}" \
+            -F number="$PR_NUMBER" \
+            -f query='query($owner:String!, $name:String!, $number:Int!, $endCursor:String) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { reviewThreads(first:100, after:$endCursor) { pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:100) { nodes { databaseId body path line originalLine diffHunk author { login } } } } } } } }' |
+            jq -cs \
+              --arg footer "$REVIEW_FOOTER" \
+              --arg legacy "$LEGACY_REVIEW_MARKER" '
+                def ends_with_marker($marker):
+                  sub("[\\r\\n]+$"; "")
+                  | . == $marker or endswith("\n" + $marker);
 
-          case "${1:-}" in
-            threads)
-              query_threads
-              ;;
-            reply)
-              if [[ $# -ne 4 || ! "$2" =~ ^PRRT_ ]]; then
-                echo "usage: $0 reply THREAD_ID {fixed|partially-fixed} DETAIL" >&2
-                exit 2
-              fi
-              thread_id="$2"
-              state="$3"
-              detail="$4"
-              case "$state" in
-                fixed)
-                  prefix="Fixed. "
-                  max_detail=493
-                  ;;
-                partially-fixed)
-                  prefix="Partially fixed. "
-                  max_detail=483
-                  ;;
-                *)
-                  echo "reply state must be fixed or partially-fixed" >&2
-                  exit 2
-                  ;;
-              esac
-              if [[ -z "$detail" || ${#detail} -gt $max_detail ]]; then
-                echo "reply detail must contain 1-$max_detail characters for state $state" >&2
-                exit 2
-              fi
-              body="$prefix$detail"
-              if ! thread="$(query_threads | jq -ce --arg thread_id "$thread_id" '.[] | select(.id == $thread_id and (.isResolved | not))')"; then
-                echo "review thread $2 does not belong to this workflow on PR $PR_NUMBER" >&2
-                exit 2
-              fi
-              if jq -e \
-                --arg state "$state" \
-                --arg body "$body" \
-                'any(.workflowReplies[]; .state == "fixed" or (.state == $state and .detail == $body))' \
-                <<< "$thread" \
-                > /dev/null; then
-                echo "review thread $thread_id already has an equivalent acknowledgement" >&2
-                exit 2
-              fi
-              stamped_body="${body}"$'\n\n'"${REVIEW_FOOTER}"
-              gh api graphql \
-                --raw-field threadId="$thread_id" \
-                --raw-field body="$stamped_body" \
-                -f query='mutation($threadId:ID!, $body:String!) { addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId, body:$body}) { comment { databaseId } } }'
-              ;;
-            *)
-              echo "usage: $0 {threads|reply}" >&2
-              exit 2
-              ;;
-          esac
-          REVIEW_API
+                [
+                  .[].data.repository.pullRequest.reviewThreads.nodes[]
+                  | .comments.nodes as $comments
+                  | $comments[0] as $top
+                  | select($top.author.login == "github-actions")
+                  | select(
+                      $top.body
+                      | (ends_with_marker($footer) or ends_with_marker($legacy))
+                    )
+                  | if .isResolved then
+                      {
+                        id,
+                        isResolved,
+                        top: {
+                          body: $top.body[:500],
+                          path: $top.path,
+                          line: $top.line,
+                          originalLine: $top.originalLine
+                        }
+                      }
+                    else
+                      {
+                        id,
+                        isResolved,
+                        commentsLimitReached: ($comments | length == 100),
+                        top: {
+                          databaseId: $top.databaseId,
+                          body: $top.body[:4000],
+                          path: $top.path,
+                          line: $top.line,
+                          originalLine: $top.originalLine,
+                          diffHunk: ($top.diffHunk // "")[:4000]
+                        }
+                      }
+                    end
+                ]
+              '
+          REVIEW_QUERY
           chmod 400 "$hook_path"
-          chmod 500 "$review_api_path"
-          bash -n "$review_api_path"
-          if [[ -w "$hook_path" || -w "$review_api_path" ]]; then
+          chmod 500 "$review_query_path"
+          bash -n "$review_query_path"
+          if [[ -w "$hook_path" || -w "$review_query_path" ]]; then
             echo "::error::Generated review controls must not remain owner-writable"
             exit 1
           fi
-          "$review_api_path" threads > "$RUNNER_TEMP/code-review-threads.json"
-          if "$review_api_path" reply > /dev/null 2>&1; then
-            echo "::error::Review API accepted a reply without a thread ID and body"
-            exit 1
-          fi
-          if "$review_api_path" reply PRRT_test fixed > /dev/null 2>&1; then
-            echo "::error::Review API accepted a reply without detail"
-            exit 1
-          fi
-          if "$review_api_path" reply PRRT_test invalid "State self-test" > /dev/null 2>&1; then
-            echo "::error::Review API accepted an invalid reply state"
-            exit 1
-          fi
-          if "$review_api_path" reply PRRT_test fixed "Ownership self-test" > /dev/null 2>&1; then
-            echo "::error::Review API accepted a thread outside this workflow and PR"
+          "$review_query_path" > "$RUNNER_TEMP/code-review-threads.json"
+          if "$review_query_path" unexpected > /dev/null 2>&1; then
+            echo "::error::Review thread query accepted unexpected arguments"
             exit 1
           fi
 
           jq -n \
-            --arg command "bash \"$hook_path\" \"$REVIEW_FOOTER\"" \
-            '{hooks: {PreToolUse: [{matcher: "mcp__github_inline_comment__create_inline_comment", hooks: [{type: "command", command: $command, timeout: 10}]}]}}' \
+            --arg command "bash \"$hook_path\" \"$REVIEW_FOOTER\" \"$review_query_path\"" \
+            '{hooks: {PreToolUse: [{matcher: "mcp__github_inline_comment__create_inline_comment|Bash", hooks: [{type: "command", command: $command, timeout: 10}]}]}}' \
             > "$RUNNER_TEMP/code-review-settings.json"
 
           hook_result="$(
             jq -n --arg body "Hook self-test" '{tool_name: "mcp__github_inline_comment__create_inline_comment", tool_input: {body: $body, path: "test", line: 1}}' |
-              bash "$hook_path" "$REVIEW_FOOTER"
+              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path"
           )"
           jq -e \
             --arg body "Hook self-test" \
@@ -363,15 +309,19 @@ jobs:
 
           trailing_newline_result="$(
             jq -n --arg footer "$REVIEW_FOOTER" '{tool_name: "mcp__github_inline_comment__create_inline_comment", tool_input: {body: ("Hook self-test\n\n" + $footer + "\r\n"), path: "test", line: 1}}' |
-              bash "$hook_path" "$REVIEW_FOOTER"
+              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path"
           )"
           jq -e \
             --arg footer "$REVIEW_FOOTER" \
             '.hookSpecificOutput.updatedInput.body == ("Hook self-test\n\n" + $footer)' \
             <<< "$trailing_newline_result" \
             > /dev/null
-          if [[ "$(< "$review_api_path")" != *'--raw-field body='* ]]; then
-            echo "::error::Review API must pass reply bodies as raw fields"
+          unsafe_bash_result="$(
+            jq -n --arg command "$review_query_path; env" '{tool_name: "Bash", tool_input: {command: $command}}' |
+              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path"
+          )"
+          if ! jq -e '.hookSpecificOutput.permissionDecision == "deny"' <<< "$unsafe_bash_result" > /dev/null; then
+            echo "::error::Review hook must reject trailing shell syntax"
             exit 1
           fi
 
@@ -389,16 +339,14 @@ jobs:
 
             Before starting your review, check for and resolve your own previous comments:
 
-            1. Run `/tmp/code-review-api.sh threads`. It returns only this workflow's review threads on the current PR, with the top-level finding, its location, and prior workflow reply state.
+            1. Run `/tmp/code-review-threads.sh`. It returns only this workflow's review threads on the current PR, with the top-level finding and its location.
             2. Get the current diff: `gh pr diff ${{ env.PR_NUMBER }}`
             3. Determine which previous comments still need handling from the `isResolved` state returned in step 1, and SKIP every comment whose thread is already resolved. For each previous comment on a STILL-UNRESOLVED thread:
                - If `commentsLimitReached` is true, leave the thread untouched for a maintainer; automatic handling intentionally stops at 100 comments
-               - If `workflowReplies` contains `state: "fixed"`, leave the thread untouched — it is waiting for maintainer resolution
                - If `top.line` is non-null, inspect the current file around that line and verify the construct named by the finding
-               - If `top.line` is null, the comment is outdated and `top.originalLine` is stale. Use `top.diffHunk`, the finding body, and repository search to locate the referenced construct in the current code. Reply "Fixed." only when semantic evidence shows the concern is gone; if uncertain, leave the thread untouched
-               - If FIXED: run `/tmp/code-review-api.sh reply THREAD_ID fixed '{brief description}'`; do not attempt to resolve the thread because the hardened workflow token cannot do so
+               - If `top.line` is null, the comment is outdated and `top.originalLine` is stale. Use `top.diffHunk`, the finding body, and repository search to locate the referenced construct in the current code
+               - If FIXED or PARTIALLY FIXED: leave the thread untouched for a maintainer to resolve; this workflow does not post thread replies
                - If STILL EXISTS: leave the thread untouched — do NOT reply again and do NOT create a duplicate inline comment (avoid re-notifying on every synchronize)
-               - If PARTIALLY FIXED: compare the remaining concern with existing `state: "partially-fixed"` reply details. Run `/tmp/code-review-api.sh reply THREAD_ID partially-fixed '{what remains}'` only when the remaining concern is materially different; the wrapper rejects an equivalent update
             4. Only create NEW inline comments for genuinely new issues not already covered by any unresolved or resolved thread returned in step 1. A resolved thread remains prior coverage even when the underlying construct is unchanged.
 
             ## Review Execution Protocol
@@ -408,11 +356,11 @@ jobs:
             Post findings as inline review comments on the specific lines where issues are found. Anchor line numbers to the current `gh pr diff`, not merge-ref workspace line numbers.
             Create new inline comments only with `mcp__github_inline_comment__create_inline_comment`, never with `gh api`. End every inline review comment with this exact human-readable footer on its own line: `${{ env.REVIEW_FOOTER }}`. A deterministic hook enforces the footer before the tool runs.
           # Keep the tool surface narrow: inline comments, read-only PR/git inspection,
-          # plus a fixed wrapper for reading and replying to previous review threads.
+          # plus one fixed read-only wrapper for previous review threads.
           claude_args: |
             --model claude-opus-5
             --max-turns 300
-            --allowedTools "Read,Glob,Grep,WebSearch,WebFetch,mcp__github_inline_comment__create_inline_comment,Bash(/tmp/code-review-api.sh:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git log:*),Bash(git blame:*)"
+            --allowedTools "Read,Glob,Grep,WebSearch,WebFetch,mcp__github_inline_comment__create_inline_comment,Bash(/tmp/code-review-threads.sh),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git log:*),Bash(git blame:*)"
         env:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL || 'https://api.anthropic.com' }}
