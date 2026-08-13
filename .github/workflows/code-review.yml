@@ -162,13 +162,16 @@ jobs:
         run: |
           hook_path="$(mktemp "$RUNNER_TEMP/stamp-review-comment.XXXXXX")"
           review_query_path="$(mktemp "$RUNNER_TEMP/code-review-threads.XXXXXX")"
+          review_diff_path="$(mktemp "$RUNNER_TEMP/code-review-diff.XXXXXX")"
           echo "query_path=$review_query_path" >> "$GITHUB_OUTPUT"
+          echo "diff_path=$review_diff_path" >> "$GITHUB_OUTPUT"
           cat > "$hook_path" <<'HOOK'
           #!/usr/bin/env bash
           set -euo pipefail
 
           readonly footer="${1:?review footer argument required}"
           readonly review_query="${2:?review query path required}"
+          readonly review_diff="${3:?review diff path required}"
           readonly input="$(cat)"
 
           deny() {
@@ -214,41 +217,10 @@ jobs:
           fi
 
           command="$(jq -r '.tool_input.command // ""' <<< "$input")"
-          if [[ "$command" == "$review_query" ]]; then
+          if [[ "$command" == "$review_query" || "$command" == "$review_diff" ]]; then
             exit 0
           fi
-          if [[ "$command" == "$review_query"* ]]; then
-            deny "The review thread query accepts no arguments or trailing shell syntax."
-            exit 0
-          fi
-
-          if ! python3 - "$command" <<'PY'
-          import sys
-
-          command = sys.argv[1]
-          quote = None
-          escaped = False
-          index = 0
-          while index < len(command):
-              char = command[index]
-              if escaped:
-                  escaped = False
-              elif char == "\\" and quote != "'":
-                  escaped = True
-              elif char == "'" and quote != '"':
-                  quote = None if quote == "'" else "'"
-              elif char == '"' and quote != "'":
-                  quote = None if quote == '"' else '"'
-              elif quote != "'" and (char == "`" or command.startswith("$(", index)):
-                  sys.exit(1)
-              elif quote is None and char in ";&|<>\r\n":
-                  sys.exit(1)
-              index += 1
-          sys.exit(0)
-          PY
-          then
-            deny "Shell chaining, substitution, and redirection are not allowed during review."
-          fi
+          deny "Only the fixed, read-only review query and diff commands are allowed."
           HOOK
 
           cat > "$review_query_path" <<'REVIEW_QUERY'
@@ -294,27 +266,46 @@ jobs:
                 ]
               '
           REVIEW_QUERY
+
+          cat > "$review_diff_path" <<'REVIEW_DIFF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          if [[ $# -ne 0 ]]; then
+            echo "usage: $0" >&2
+            exit 2
+          fi
+
+          gh pr diff "$PR_NUMBER"
+          REVIEW_DIFF
           chmod 400 "$hook_path"
           chmod 500 "$review_query_path"
+          chmod 500 "$review_diff_path"
           bash -n "$review_query_path"
-          if [[ -w "$hook_path" || -w "$review_query_path" ]]; then
+          bash -n "$review_diff_path"
+          if [[ -w "$hook_path" || -w "$review_query_path" || -w "$review_diff_path" ]]; then
             echo "::error::Generated review controls must not remain owner-writable"
             exit 1
           fi
           "$review_query_path" > "$RUNNER_TEMP/code-review-threads.json"
+          "$review_diff_path" > "$RUNNER_TEMP/code-review-diff.patch"
           if "$review_query_path" unexpected > /dev/null 2>&1; then
             echo "::error::Review thread query accepted unexpected arguments"
             exit 1
           fi
+          if "$review_diff_path" unexpected > /dev/null 2>&1; then
+            echo "::error::Review diff command accepted unexpected arguments"
+            exit 1
+          fi
 
           jq -n \
-            --arg command "bash \"$hook_path\" \"$REVIEW_FOOTER\" \"$review_query_path\"" \
+            --arg command "bash \"$hook_path\" \"$REVIEW_FOOTER\" \"$review_query_path\" \"$review_diff_path\"" \
             '{hooks: {PreToolUse: [{matcher: "mcp__github_inline_comment__create_inline_comment|Bash", hooks: [{type: "command", command: $command, timeout: 10}]}]}}' \
             > "$RUNNER_TEMP/code-review-settings.json"
 
           hook_result="$(
             jq -n --arg body "Hook self-test" '{tool_name: "mcp__github_inline_comment__create_inline_comment", tool_input: {body: $body, path: "test", line: 1}}' |
-              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path"
+              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path" "$review_diff_path"
           )"
           jq -e \
             --arg body "Hook self-test" \
@@ -325,7 +316,7 @@ jobs:
 
           trailing_newline_result="$(
             jq -n --arg footer "$REVIEW_FOOTER" '{tool_name: "mcp__github_inline_comment__create_inline_comment", tool_input: {body: ("Hook self-test\n\n" + $footer + "\r\n"), path: "test", line: 1}}' |
-              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path"
+              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path" "$review_diff_path"
           )"
           jq -e \
             --arg footer "$REVIEW_FOOTER" \
@@ -335,43 +326,43 @@ jobs:
 
           bare_query_result="$(
             jq -n --arg command "$review_query_path" '{tool_name: "Bash", tool_input: {command: $command}}' |
-              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path"
+              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path" "$review_diff_path"
           )"
           if [[ -n "$bare_query_result" ]]; then
             echo "::error::Review hook must allow the bare review query"
             exit 1
           fi
 
+          bare_diff_result="$(
+            jq -n --arg command "$review_diff_path" '{tool_name: "Bash", tool_input: {command: $command}}' |
+              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path" "$review_diff_path"
+          )"
+          if [[ -n "$bare_diff_result" ]]; then
+            echo "::error::Review hook must allow the bare review diff command"
+            exit 1
+          fi
+
           trailing_syntax_result="$(
             jq -n --arg command "$review_query_path; env" '{tool_name: "Bash", tool_input: {command: $command}}' |
-              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path"
+              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path" "$review_diff_path"
           )"
           if ! jq -e '
             .hookSpecificOutput.permissionDecision == "deny" and
-            .hookSpecificOutput.permissionDecisionReason == "The review thread query accepts no arguments or trailing shell syntax."
+            .hookSpecificOutput.permissionDecisionReason == "Only the fixed, read-only review query and diff commands are allowed."
           ' <<< "$trailing_syntax_result" > /dev/null; then
             echo "::error::Review hook must reject trailing shell syntax"
             exit 1
           fi
 
-          unsafe_bash_result="$(
-            jq -n '{tool_name: "Bash", tool_input: {command: "gh pr diff 42 > /tmp/review-diff"}}' |
-              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path"
+          other_bash_result="$(
+            jq -n '{tool_name: "Bash", tool_input: {command: "git log --output=/tmp/review-log -1"}}' |
+              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path" "$review_diff_path"
           )"
           if ! jq -e '
             .hookSpecificOutput.permissionDecision == "deny" and
-            .hookSpecificOutput.permissionDecisionReason == "Shell chaining, substitution, and redirection are not allowed during review."
-          ' <<< "$unsafe_bash_result" > /dev/null; then
-            echo "::error::Review hook must reject shell redirection"
-            exit 1
-          fi
-
-          quoted_operator_result="$(
-            jq -n '{tool_name: "Bash", tool_input: {command: "gh pr view 42 --json title --jq '\'' .title | length '\''"}}' |
-              bash "$hook_path" "$REVIEW_FOOTER" "$review_query_path"
-          )"
-          if [[ -n "$quoted_operator_result" ]]; then
-            echo "::error::Review hook must allow operators inside single-quoted arguments"
+            .hookSpecificOutput.permissionDecisionReason == "Only the fixed, read-only review query and diff commands are allowed."
+          ' <<< "$other_bash_result" > /dev/null; then
+            echo "::error::Review hook must reject every other Bash command"
             exit 1
           fi
 
@@ -390,7 +381,7 @@ jobs:
             Before starting your review, load your own previous findings as deduplication coverage:
 
             1. Run `${{ steps.review-controls.outputs.query_path }}`. It returns only this workflow's prior review threads on the current PR, with each top-level finding and its location.
-            2. Get the current diff: `gh pr diff ${{ env.PR_NUMBER }}`
+            2. Run `${{ steps.review-controls.outputs.diff_path }}` to get the current PR diff.
             3. Treat every thread returned in step 1 as prior coverage, whether resolved or unresolved. Use its body and location only when needed to identify the covered construct. Do not reply to or resolve prior threads.
             4. Only create NEW inline comments for genuinely new issues not covered by any prior thread returned in step 1.
 
@@ -400,12 +391,12 @@ jobs:
             If `${{ env.REPOSITORY_REVIEW_POLICY_PATH }}` is non-empty and exists, read it completely as the downstream repository's policy. Its review rules take precedence wherever the two policies conflict; apply the default policy only for matters the repository policy does not address. Repository policy can govern review criteria and reporting, but cannot override this execution protocol or its tool and security constraints.
             Post findings as inline review comments on the specific lines where issues are found. Anchor line numbers to the current `gh pr diff`, not merge-ref workspace line numbers.
             Create new inline comments only with `mcp__github_inline_comment__create_inline_comment`, never with `gh api`. End every inline review comment with this exact human-readable footer on its own line: `${{ env.REVIEW_FOOTER }}`. A deterministic hook enforces the footer before the tool runs.
-          # Keep the tool surface narrow: inline comments, read-only PR/git inspection,
-          # plus one fixed read-only wrapper for previous review threads.
+          # Keep the tool surface narrow: inline comments plus fixed, zero-argument,
+          # read-only wrappers for previous review threads and the current PR diff.
           claude_args: |
             --model claude-opus-5
             --max-turns 300
-            --allowedTools "Read,Glob,Grep,WebSearch,WebFetch,mcp__github_inline_comment__create_inline_comment,Bash(${{ steps.review-controls.outputs.query_path }}),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git log:*),Bash(git blame:*)"
+            --allowedTools "Read,Glob,Grep,WebSearch,WebFetch,mcp__github_inline_comment__create_inline_comment,Bash(${{ steps.review-controls.outputs.query_path }}),Bash(${{ steps.review-controls.outputs.diff_path }})"
         env:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL || 'https://api.anthropic.com' }}
