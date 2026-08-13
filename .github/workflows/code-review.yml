@@ -216,36 +216,50 @@ jobs:
                     .[].data.repository.pullRequest.reviewThreads.nodes[]
                     | .comments.nodes as $comments
                     | $comments[0] as $top
-                    | select(.isResolved | not)
                     | select($top.author.login == "github-actions")
                     | select(
                         $top.body
-                        | ends_with_marker($footer) or ends_with_marker($legacy)
+                        | (ends_with_marker($footer) or ends_with_marker($legacy))
                       )
-                    | {
-                        id,
-                        isResolved,
-                        commentsLimitReached: ($comments | length == 100),
-                        top: {
-                          databaseId: $top.databaseId,
-                          body: $top.body[:4000],
-                          path: $top.path,
-                          line: $top.line,
-                          originalLine: $top.originalLine,
-                          diffHunk: ($top.diffHunk // "")[:4000]
-                        },
-                        workflowReplies: [
-                          $comments[1:][]
-                          | select(.author.login == "github-actions")
-                          | if (.body | startswith("Fixed.")) then
-                              {state: "fixed", detail: .body[:500]}
-                            elif (.body | startswith("Partially fixed.")) then
-                              {state: "partially-fixed", detail: .body[:500]}
-                            else
-                              empty
-                            end
-                        ]
-                      }
+                    | if .isResolved then
+                        {
+                          id,
+                          isResolved,
+                          top: {
+                            body: $top.body[:500],
+                            path: $top.path,
+                            line: $top.line,
+                            originalLine: $top.originalLine
+                          }
+                        }
+                      else
+                        {
+                          id,
+                          isResolved,
+                          commentsLimitReached: ($comments | length == 100),
+                          top: {
+                            databaseId: $top.databaseId,
+                            body: $top.body[:4000],
+                            path: $top.path,
+                            line: $top.line,
+                            originalLine: $top.originalLine,
+                            diffHunk: ($top.diffHunk // "")[:4000]
+                          },
+                          workflowReplies: [
+                            $comments[1:][]
+                            | select(.author.login == "github-actions")
+                            | select(.body | ends_with_marker($footer))
+                            | (.body | sub("[\\r\\n]+$"; "") | rtrimstr("\n\n" + $footer)) as $reply
+                            | if ($reply | startswith("Fixed.")) then
+                                {state: "fixed", detail: $reply}
+                              elif ($reply | startswith("Partially fixed.")) then
+                                {state: "partially-fixed", detail: $reply}
+                              else
+                                empty
+                              end
+                          ]
+                        }
+                      end
                   ]
                 '
           }
@@ -262,19 +276,26 @@ jobs:
               thread_id="$2"
               state="$3"
               detail="$4"
-              if [[ -z "$detail" || ${#detail} -gt 500 ]]; then
-                echo "reply detail must contain 1-500 characters" >&2
-                exit 2
-              fi
               case "$state" in
-                fixed) body="Fixed. $detail" ;;
-                partially-fixed) body="Partially fixed. $detail" ;;
+                fixed)
+                  prefix="Fixed. "
+                  max_detail=493
+                  ;;
+                partially-fixed)
+                  prefix="Partially fixed. "
+                  max_detail=483
+                  ;;
                 *)
                   echo "reply state must be fixed or partially-fixed" >&2
                   exit 2
                   ;;
               esac
-              if ! thread="$(query_threads | jq -ce --arg thread_id "$thread_id" '.[] | select(.id == $thread_id)')"; then
+              if [[ -z "$detail" || ${#detail} -gt $max_detail ]]; then
+                echo "reply detail must contain 1-$max_detail characters for state $state" >&2
+                exit 2
+              fi
+              body="$prefix$detail"
+              if ! thread="$(query_threads | jq -ce --arg thread_id "$thread_id" '.[] | select(.id == $thread_id and (.isResolved | not))')"; then
                 echo "review thread $2 does not belong to this workflow on PR $PR_NUMBER" >&2
                 exit 2
               fi
@@ -287,9 +308,10 @@ jobs:
                 echo "review thread $thread_id already has an equivalent acknowledgement" >&2
                 exit 2
               fi
+              stamped_body="${body}"$'\n\n'"${REVIEW_FOOTER}"
               gh api graphql \
                 --raw-field threadId="$thread_id" \
-                --raw-field body="$body" \
+                --raw-field body="$stamped_body" \
                 -f query='mutation($threadId:ID!, $body:String!) { addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId, body:$body}) { comment { databaseId } } }'
               ;;
             *)
@@ -298,8 +320,13 @@ jobs:
               ;;
           esac
           REVIEW_API
-          chmod 700 "$review_api_path"
+          chmod 400 "$hook_path"
+          chmod 500 "$review_api_path"
           bash -n "$review_api_path"
+          if [[ -w "$hook_path" || -w "$review_api_path" ]]; then
+            echo "::error::Generated review controls must not remain owner-writable"
+            exit 1
+          fi
           "$review_api_path" threads > "$RUNNER_TEMP/code-review-threads.json"
           if "$review_api_path" reply > /dev/null 2>&1; then
             echo "::error::Review API accepted a reply without a thread ID and body"
@@ -372,7 +399,7 @@ jobs:
                - If FIXED: run `/tmp/code-review-api.sh reply THREAD_ID fixed '{brief description}'`; do not attempt to resolve the thread because the hardened workflow token cannot do so
                - If STILL EXISTS: leave the thread untouched — do NOT reply again and do NOT create a duplicate inline comment (avoid re-notifying on every synchronize)
                - If PARTIALLY FIXED: compare the remaining concern with existing `state: "partially-fixed"` reply details. Run `/tmp/code-review-api.sh reply THREAD_ID partially-fixed '{what remains}'` only when the remaining concern is materially different; the wrapper rejects an equivalent update
-            4. Only create NEW inline comments for genuinely new issues not already covered.
+            4. Only create NEW inline comments for genuinely new issues not already covered by any unresolved or resolved thread returned in step 1. A resolved thread remains prior coverage even when the underlying construct is unchanged.
 
             ## Review Execution Protocol
 
