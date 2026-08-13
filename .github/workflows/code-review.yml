@@ -156,6 +156,7 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          show_full_output: true
           allowed_bots: ${{ env.ALLOWED_BOTS }}
           # Force the action onto the job-scoped GITHUB_TOKEN (contents: read,
           # pull-requests: write) instead of its default write-capable GitHub App
