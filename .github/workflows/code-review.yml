@@ -171,6 +171,7 @@ jobs:
             if .tool_name == "mcp__github_inline_comment__create_inline_comment" then
               .tool_input as $input
               | ($input.body // "") as $body
+              | ($body | sub("[\\r\\n]+$"; "")) as $trimmed_body
               | {
                   hookSpecificOutput: {
                     hookEventName: "PreToolUse",
@@ -179,10 +180,10 @@ jobs:
                       $input
                       + {
                           body: (
-                            if $body == $footer or ($body | endswith("\n" + $footer)) then
-                              $body
+                            if $trimmed_body == $footer or ($trimmed_body | endswith("\n" + $footer)) then
+                              $trimmed_body
                             else
-                              $body + "\n\n" + $footer
+                              $trimmed_body + "\n\n" + $footer
                             end
                           )
                         }
@@ -207,12 +208,15 @@ jobs:
               jq -cs \
                 --arg footer "$REVIEW_FOOTER" \
                 --arg legacy "$LEGACY_REVIEW_MARKER" '
-                  def ends_with_marker($marker): . == $marker or endswith("\n" + $marker);
+                  def ends_with_marker($marker):
+                    sub("[\\r\\n]+$"; "")
+                    | . == $marker or endswith("\n" + $marker);
 
                   [
                     .[].data.repository.pullRequest.reviewThreads.nodes[]
                     | .comments.nodes as $comments
                     | $comments[0] as $top
+                    | select(.isResolved | not)
                     | select($top.author.login == "github-actions")
                     | select(
                         $top.body
@@ -224,11 +228,11 @@ jobs:
                         commentsLimitReached: ($comments | length == 100),
                         top: {
                           databaseId: $top.databaseId,
-                          body: $top.body,
+                          body: $top.body[:4000],
                           path: $top.path,
                           line: $top.line,
                           originalLine: $top.originalLine,
-                          diffHunk: $top.diffHunk
+                          diffHunk: ($top.diffHunk // "")[:4000]
                         },
                         workflowReplies: [
                           $comments[1:][]
@@ -251,17 +255,41 @@ jobs:
               query_threads
               ;;
             reply)
-              if [[ $# -ne 3 || ! "$2" =~ ^PRRT_ ]]; then
-                echo "usage: $0 reply THREAD_ID BODY" >&2
+              if [[ $# -ne 4 || ! "$2" =~ ^PRRT_ ]]; then
+                echo "usage: $0 reply THREAD_ID {fixed|partially-fixed} DETAIL" >&2
                 exit 2
               fi
-              if ! query_threads | jq -e --arg thread_id "$2" 'any(.[]; .id == $thread_id)' > /dev/null; then
+              thread_id="$2"
+              state="$3"
+              detail="$4"
+              if [[ -z "$detail" || ${#detail} -gt 500 ]]; then
+                echo "reply detail must contain 1-500 characters" >&2
+                exit 2
+              fi
+              case "$state" in
+                fixed) body="Fixed. $detail" ;;
+                partially-fixed) body="Partially fixed. $detail" ;;
+                *)
+                  echo "reply state must be fixed or partially-fixed" >&2
+                  exit 2
+                  ;;
+              esac
+              if ! thread="$(query_threads | jq -ce --arg thread_id "$thread_id" '.[] | select(.id == $thread_id)')"; then
                 echo "review thread $2 does not belong to this workflow on PR $PR_NUMBER" >&2
                 exit 2
               fi
+              if jq -e \
+                --arg state "$state" \
+                --arg body "$body" \
+                'any(.workflowReplies[]; .state == "fixed" or (.state == $state and .detail == $body))' \
+                <<< "$thread" \
+                > /dev/null; then
+                echo "review thread $thread_id already has an equivalent acknowledgement" >&2
+                exit 2
+              fi
               gh api graphql \
-                -f threadId="$2" \
-                -f body="$3" \
+                --raw-field threadId="$thread_id" \
+                --raw-field body="$body" \
                 -f query='mutation($threadId:ID!, $body:String!) { addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId, body:$body}) { comment { databaseId } } }'
               ;;
             *)
@@ -277,11 +305,15 @@ jobs:
             echo "::error::Review API accepted a reply without a thread ID and body"
             exit 1
           fi
-          if "$review_api_path" reply PRRT_test > /dev/null 2>&1; then
-            echo "::error::Review API accepted a reply without a body"
+          if "$review_api_path" reply PRRT_test fixed > /dev/null 2>&1; then
+            echo "::error::Review API accepted a reply without detail"
             exit 1
           fi
-          if "$review_api_path" reply PRRT_test "Ownership self-test" > /dev/null 2>&1; then
+          if "$review_api_path" reply PRRT_test invalid "State self-test" > /dev/null 2>&1; then
+            echo "::error::Review API accepted an invalid reply state"
+            exit 1
+          fi
+          if "$review_api_path" reply PRRT_test fixed "Ownership self-test" > /dev/null 2>&1; then
             echo "::error::Review API accepted a thread outside this workflow and PR"
             exit 1
           fi
@@ -302,6 +334,20 @@ jobs:
             <<< "$hook_result" \
             > /dev/null
 
+          trailing_newline_result="$(
+            jq -n --arg footer "$REVIEW_FOOTER" '{tool_name: "mcp__github_inline_comment__create_inline_comment", tool_input: {body: ("Hook self-test\n\n" + $footer + "\r\n"), path: "test", line: 1}}' |
+              bash "$hook_path" "$REVIEW_FOOTER"
+          )"
+          jq -e \
+            --arg footer "$REVIEW_FOOTER" \
+            '.hookSpecificOutput.updatedInput.body == ("Hook self-test\n\n" + $footer)' \
+            <<< "$trailing_newline_result" \
+            > /dev/null
+          if [[ "$(< "$review_api_path")" != *'--raw-field body='* ]]; then
+            echo "::error::Review API must pass reply bodies as raw fields"
+            exit 1
+          fi
+
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -320,12 +366,12 @@ jobs:
             2. Get the current diff: `gh pr diff ${{ env.PR_NUMBER }}`
             3. Determine which previous comments still need handling from the `isResolved` state returned in step 1, and SKIP every comment whose thread is already resolved. For each previous comment on a STILL-UNRESOLVED thread:
                - If `commentsLimitReached` is true, leave the thread untouched for a maintainer; automatic handling intentionally stops at 100 comments
+               - If `workflowReplies` contains `state: "fixed"`, leave the thread untouched — it is waiting for maintainer resolution
                - If `top.line` is non-null, inspect the current file around that line and verify the construct named by the finding
                - If `top.line` is null, the comment is outdated and `top.originalLine` is stale. Use `top.diffHunk`, the finding body, and repository search to locate the referenced construct in the current code. Reply "Fixed." only when semantic evidence shows the concern is gone; if uncertain, leave the thread untouched
-               - If `workflowReplies` contains `state: "fixed"`, leave the thread untouched — it is waiting for maintainer resolution
-               - If FIXED: run `/tmp/code-review-api.sh reply THREAD_ID 'Fixed. {brief description}'`; do not attempt to resolve the thread because the hardened workflow token cannot do so
+               - If FIXED: run `/tmp/code-review-api.sh reply THREAD_ID fixed '{brief description}'`; do not attempt to resolve the thread because the hardened workflow token cannot do so
                - If STILL EXISTS: leave the thread untouched — do NOT reply again and do NOT create a duplicate inline comment (avoid re-notifying on every synchronize)
-               - If PARTIALLY FIXED: compare the remaining concern with existing `state: "partially-fixed"` reply details. Reply once with `/tmp/code-review-api.sh reply THREAD_ID 'Partially fixed. {what remains}'` only when the remaining concern is materially different; do not repeat an equivalent update
+               - If PARTIALLY FIXED: compare the remaining concern with existing `state: "partially-fixed"` reply details. Run `/tmp/code-review-api.sh reply THREAD_ID partially-fixed '{what remains}'` only when the remaining concern is materially different; the wrapper rejects an equivalent update
             4. Only create NEW inline comments for genuinely new issues not already covered.
 
             ## Review Execution Protocol
