@@ -113,6 +113,17 @@ jobs:
             exit 1
           fi
 
+      - name: Snapshot existing review comments
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            "repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments" \
+            --paginate \
+            --jq '.[].id' \
+            > "$RUNNER_TEMP/code-review-comment-ids"
+
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -126,8 +137,8 @@ jobs:
 
             Before starting your review, check for and resolve your own previous comments:
 
-            1. Get all previous top-level inline review comments authored by THIS workflow — `github-actions[bot]` comments that carry the human-readable workflow footer `Automated review · workflow-id: krosdai/.github/code-review/v1` (this excludes replies and other tools that share the `github-actions[bot]` token):
-               `gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments --paginate --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains("workflow-id: krosdai/.github/code-review/v1")) and .in_reply_to_id == null)]'`
+            1. Get all previous top-level inline review comments authored by THIS workflow — `github-actions[bot]` comments that end with either the current human-readable workflow footer `Automated review · workflow-id: krosdai/.github/code-review/v1` or the legacy `<!-- claude-code-review -->` marker (this excludes replies and other tools that share the `github-actions[bot]` token):
+               `gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments --paginate --jq 'def ends_with_footer($footer): . == $footer or endswith("\n" + $footer); [.[] | select(.user.login == "github-actions[bot]" and (.body | (ends_with_footer("Automated review · workflow-id: krosdai/.github/code-review/v1") or ends_with_footer("<!-- claude-code-review -->"))) and .in_reply_to_id == null)]'`
             2. Get the current diff: `gh pr diff ${{ env.PR_NUMBER }}`
             3. Determine which previous comments still need handling: run the step-5 GraphQL query to get each thread's `isResolved`, and SKIP every comment whose thread is already resolved (it was fixed and closed in an earlier run — never reply to it again). For each previous comment on a STILL-UNRESOLVED thread:
                - Read the CURRENT version of the file at the commented line
@@ -155,3 +166,35 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL || 'https://api.anthropic.com' }}
+
+      - name: Stamp new review comments
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_FOOTER: "Automated review · workflow-id: krosdai/.github/code-review/v1"
+        run: |
+          declare -A existing_comments=()
+          while read -r comment_id; do
+            existing_comments["$comment_id"]=1
+          done < "$RUNNER_TEMP/code-review-comment-ids"
+
+          gh api \
+            "repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments" \
+            --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and .in_reply_to_id == null) | [.id, (.body | @base64)] | @tsv' |
+            while IFS=$'\t' read -r comment_id encoded_body; do
+              if [[ -v "existing_comments[$comment_id]" ]]; then
+                continue
+              fi
+
+              body="$(printf '%s' "$encoded_body" | base64 --decode)"
+              if [[ "$body" == "$REVIEW_FOOTER" || "$body" == *$'\n'"$REVIEW_FOOTER" ]]; then
+                continue
+              fi
+
+              gh api \
+                --method PATCH \
+                "repos/${{ github.repository }}/pulls/comments/$comment_id" \
+                -f body="${body}"$'\n\n'"${REVIEW_FOOTER}"
+            done
