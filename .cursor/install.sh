@@ -24,9 +24,13 @@ if [ -s "$HOME/.nvm/nvm.sh" ]; then
 fi
 
 # --- mise: manages the native AutoCorrect CLI used by `pnpm format` + hooks ---
+# Pin the bootstrap installer version so this step matches the rest of the repo's
+# pinning discipline (mise.lock checksums, package.json "packageManager" sha512)
+# instead of executing whatever https://mise.run serves at runtime.
+MISE_INSTALL_VERSION="v2026.8.5"
 export PATH="${NVM_BIN_DIR:+$NVM_BIN_DIR:}$HOME/.local/bin:$PATH"
 if ! command -v mise >/dev/null 2>&1; then
-  curl -fsSL https://mise.run | sh
+  MISE_VERSION="$MISE_INSTALL_VERSION" curl -fsSL https://mise.run | sh
 fi
 
 # Ensure future interactive shells can locate mise (idempotent).
@@ -40,6 +44,13 @@ mise trust "$REPO_ROOT"
 mise install
 
 # --- Node dependencies (pnpm is pinned via package.json "packageManager") ---
+# Activate the exact pinned pnpm through Corepack so setup does not rely on a
+# pre-existing global pnpm and always matches package.json "packageManager".
+if command -v corepack >/dev/null 2>&1; then
+  export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+  corepack enable pnpm >/dev/null 2>&1 || true
+  corepack prepare --activate >/dev/null 2>&1 || true
+fi
 pnpm install --frozen-lockfile
 
 echo "Cloud Agent environment install complete."
