@@ -44,13 +44,11 @@ jobs:
       github.event.pull_request &&
       !github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository
-    uses: krosdai/.github/.github/workflows/code-review.yml@v1
+    uses: krosdai/.github/.github/workflows/code-review.yml@v2
     with:
       pr_number: ${{ github.event.pull_request.number }}
       is_draft: ${{ github.event.pull_request.draft }}
       head_repo_full_name: ${{ github.event.pull_request.head.repo.full_name }}
-    secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
 `head_repo_full_name` is required rather than optional so the same-repo check fails closed if a caller forgets to pass it.
@@ -58,36 +56,24 @@ jobs:
 Prerequisites:
 
 1. Install the [Claude GitHub App](https://github.com/apps/claude)
-2. Add `ANTHROPIC_API_KEY` to repository secrets (or organization secrets for all repos)
-3. Add `ANTHROPIC_API_KEY` **again** under Dependabot secrets — see below
-4. (Optional) Set `ANTHROPIC_BASE_URL` as a repository **variable** (not secret) if routing through a proxy like [LiteLLM](https://github.com/BerriAI/litellm)
+2. Keep `id-token: write` in the caller's `permissions`, as above. The review authenticates to the Claude API with [Workload Identity Federation](https://platform.claude.com/docs/en/manage-claude/wif-providers/github-actions): `claude-code-action` exchanges the run's GitHub OIDC token for a short-lived access token, so no `ANTHROPIC_API_KEY` secret is needed.
+3. Make sure the organization's federation rule trusts the calling repository. The OIDC token carries the caller's subject, not this repository's, in one of two formats: `repo:<owner>/<repo>:pull_request`, or GitHub's [immutable format](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims) `repo:<owner>@<owner-id>/<repo>@<repo-id>:pull_request` for repositories created, renamed, or transferred after July 15, 2026. Match on the `repository_owner_id` and `event_name` claims rather than a literal `repo:<owner>/` prefix so both formats pass. A run the rule rejects fails at the token exchange.
+
+Requests go straight to `https://api.anthropic.com`. An `ANTHROPIC_BASE_URL` variable is ignored, because the federated access token is only valid against the Claude API.
 
 The workflow skips draft PRs and fork PRs, has a 15-minute timeout, and follows the review guidelines defined in [`REVIEW.md`](REVIEW.md).
 
-#### Reviewing Dependabot PRs
+#### Migrating from `@v1`
 
-Two separate things have to be right, and only one of them lives in this repo.
+`v2` replaces the `ANTHROPIC_API_KEY` secret with Workload Identity Federation. Point `uses:` at `@v2` and delete the `secrets:` block: `v2` no longer declares that secret, so passing it fails workflow validation. The `ANTHROPIC_API_KEY` secrets and the `ANTHROPIC_BASE_URL` variable can be removed once no caller is left on `@v1`.
+
+#### Reviewing Dependabot PRs
 
 `claude-code-action` aborts on any actor that is not a `User`, so bot-authored PRs need an allow-list. The `allowed_bots` input covers this and **defaults to `dependabot[bot]`** — nothing to configure for the common case. To widen it, add `allowed_bots: "dependabot[bot],renovate[bot]"` to the `with:` block above, or pass `'*'` for every bot.
 
 Passing an empty string does _not_ disable bot reviews — GitHub expressions treat `''` as falsy, so it falls through to the default. Gate the job in your calling workflow instead.
 
-The other half is a GitHub platform behavior that no workflow change can work around: **Dependabot-triggered runs read secrets from the Dependabot store, not the Actions store.** A key that only exists as an Actions secret arrives as an empty string, and the run dies with:
-
-```
-Environment variable validation failed:
-  - Either ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or workload identity
-    federation (...) is required when using direct Anthropic API.
-```
-
-which reads as though the secret was never configured at all. Confirm the real cause with `Secret source: Dependabot` in the run log, then add the key to both stores:
-
-```sh
-gh secret set ANTHROPIC_API_KEY --org krosdai --app actions    --visibility all
-gh secret set ANTHROPIC_API_KEY --org krosdai --app dependabot --visibility all
-```
-
-Repository **variables** such as `ANTHROPIC_BASE_URL` are not partitioned this way and resolve normally.
+Unlike `v1`, there is no API key to mirror into the Dependabot secret store: Dependabot-triggered runs read secrets from a separate store, but `v2` reads no secrets at all.
 
 ## Tooling
 
