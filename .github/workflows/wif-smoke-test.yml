@@ -1,0 +1,44 @@
+name: WIF smoke test
+
+on:
+  push:
+    branches: [ci/wif-smoke-test]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  wif-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Fetch GitHub OIDC token
+        run: |
+          JWT=$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" | jq -r .value)
+          echo "::add-mask::$JWT"
+          echo "JWT=$JWT" >> "$GITHUB_ENV"
+
+      # Prints only identifying claims so a federation-rule mismatch is easy to diagnose.
+      - name: Show token claims
+        run: |
+          python - <<'EOF'
+          import base64, json, os
+          payload = os.environ["JWT"].split(".")[1]
+          claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+          keys = ("iss", "sub", "aud", "repository", "repository_owner", "ref", "event_name")
+          print(json.dumps({k: claims.get(k) for k in keys}, indent=2))
+          EOF
+
+      - name: Run WIF snippet
+        run: |
+          pip install --quiet anthropic
+          python .github/wif-smoke/wif_smoke_test.py
