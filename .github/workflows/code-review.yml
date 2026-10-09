@@ -25,6 +25,11 @@ on:
         required: false
         default: dependabot[bot]
         type: string
+      anthropic_federation_rule_id:
+        description: Workload Identity Federation rule (fdrl_...) to exchange the OIDC token against. Override it when the caller's repository is trusted by a different rule than the default, such as one scoped to another GitHub organization.
+        required: false
+        default: fdrl_01BBPmSXaBsAQnwaAZ1Cs4Eg
+        type: string
 
 permissions:
   # `actions: read` keeps Actions metadata readable for the running job.
@@ -84,6 +89,9 @@ jobs:
       # string does not work, because GitHub expressions treat '' as falsy and fall through
       # to the default below.
       ALLOWED_BOTS: ${{ inputs.allowed_bots || 'dependabot[bot]' }}
+      # Repeats the input's default for the same reason: direct PR-triggered runs have no
+      # `inputs` context.
+      FEDERATION_RULE_ID: ${{ inputs.anthropic_federation_rule_id || 'fdrl_01BBPmSXaBsAQnwaAZ1Cs4Eg' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -369,8 +377,9 @@ jobs:
           # Workload Identity Federation: the action exchanges this job's GitHub OIDC token for a
           # short-lived Claude API access token, so no API key secret is involved. These values are
           # identifiers, not secrets. The federation rule must trust every repository that calls
-          # this workflow, since the OIDC token carries the caller's `repo:` subject.
-          anthropic_federation_rule_id: fdrl_01BBPmSXaBsAQnwaAZ1Cs4Eg
+          # this workflow, since the OIDC token carries the caller's `repo:` subject; callers
+          # trusted by a different rule pass `anthropic_federation_rule_id`.
+          anthropic_federation_rule_id: ${{ env.FEDERATION_RULE_ID }}
           anthropic_organization_id: 129ad6b6-9e42-4f3b-ace4-491b511b4e16
           anthropic_service_account_id: svac_01EZxVahQ3AYDooGEXAsdMTd
           anthropic_workspace_id: wrkspc_01Mv6JrzFA2DeSDZviJGbtCh
