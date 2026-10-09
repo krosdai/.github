@@ -1,59 +1,37 @@
 # Code Review Policy
 
-This file is the single source of truth for every automated code review agent in
-this repository.
+The single source of truth for every automated code review agent in this repository.
 
-## Review scope
+## Scope
 
-- Review changes for code quality, correctness, and security
-- Analyze the diff in the context of the full codebase
-- Report only actionable findings that are specific and important
-- Keep the review concise: report at most 10 findings total
+- Review the diff for correctness, security, and code quality, in the context of the full codebase.
+- Report only specific, actionable findings, at most 10.
 
-## Severity and reporting threshold
+## Severity
 
-- **P0 — Critical:** an immediately exploitable vulnerability, irreversible data
-  loss, or a failure with similarly catastrophic impact
-- **P1 — Blocking/high risk:** an issue that can cause serious incorrect
-  behavior, security exposure, or operational failure and should block merging
-- **P2 — Meaningful:** a substantive correctness, reliability, compatibility,
-  or maintainability issue worth fixing, but without P0 or P1 impact
-- **P3 — Minor:** a low-impact improvement, nit, or preference
+Prefix every finding with its label (for example, `P1:`).
 
-Prefix every reported finding with its severity label (for example, `P1:`).
+- **P0 — Critical:** an immediately exploitable vulnerability, irreversible data loss, or a similarly catastrophic failure.
+- **P1 — Blocking:** serious incorrect behavior, security exposure, or operational failure that should block merging.
+- **P2 — Meaningful:** a substantive correctness, reliability, compatibility, or maintainability issue below P1.
+- **P3 — Minor:** a low-impact improvement, nit, or preference.
 
-For code findings, report only P0, P1, and P2 issues. Skip P3 issues entirely;
-never inflate or reframe a minor issue as P2 to make it reportable.
+Code: report P0–P2. Skip P3, and never inflate or reframe a minor issue as P2.
 
-For findings in documentation rather than code, report only verifiable factual
-errors with P0 or P1 impact. Do not report P2-or-lower documentation issues,
-including minor inaccuracies, incomplete detail, wording, tone, or style. This
-higher threshold prevents documentation review from blocking CI convergence on
-non-critical details.
+Documentation: report only verifiable factual errors at P0 or P1, so wording, detail, or style never blocks CI.
 
 ## Always check
 
-- Logic errors, off-by-one bugs, and incorrect boundary conditions
-- Security vulnerabilities (injection, XSS, SSRF, secrets in code, etc.)
-- Race conditions and concurrency issues
+- Logic errors, off-by-one bugs, and boundary conditions
+- Security: injection, XSS, SSRF, secrets in code, etc.
+- Race conditions and concurrency
 - Error handling: unhandled exceptions, swallowed errors, missing edge cases
-- API contract violations: mismatched types, missing required fields
-- Database migrations are backward-compatible
-
-## Authoring preferences (not review findings)
-
-The following preferences guide new code, but violations are not review
-findings on their own. Do not report them as style findings or inflate them to
-P2. If one directly causes a reportable correctness, security, reliability, or
-compatibility problem, report the underlying problem instead.
-
-- Prefer early returns over deeply nested conditionals
-- Use structured logging, not string interpolation in log calls
-- Keep functions focused
+- API contracts: mismatched types, missing required fields
+- Backward-compatible database migrations
 
 ## Skip
 
-- Formatting-only changes (handled by Prettier / linters)
-- Auto-generated files, lock files (`pnpm-lock.yaml`, etc.), and vendored code
-- Minor naming preferences that don't affect readability
-- Style-only issues covered by the authoring preferences above
+- Formatting (handled by Prettier and linters)
+- Generated files, lock files (`pnpm-lock.yaml`, etc.), and vendored code
+- Naming preferences that don't affect readability
+- Authoring preferences: early returns, structured logging, focused functions. They guide new code but are not findings; if a violation causes a reportable problem, report that problem instead.
