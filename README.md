@@ -75,6 +75,12 @@ Passing an empty string does _not_ disable bot reviews — GitHub expressions tr
 
 Unlike `v1`, there is no API key to mirror into the Dependabot secret store: Dependabot-triggered runs read secrets from a separate store, but `v2` reads no secrets at all.
 
+#### Using a different federation rule
+
+The token exchange uses this repository's default federation rule. A caller trusted by a different rule, such as one scoped to another GitHub organization, names it in the `with:` block above, e.g. `anthropic_federation_rule_id: fdrl_...`.
+
+The rule ID is an identifier, not a secret. The exchange succeeds only if that rule's claims match the caller's OIDC token, so the rule itself is what grants access.
+
 ## Tooling
 
 Run `mise install` after checkout to install the native AutoCorrect CLI used by
