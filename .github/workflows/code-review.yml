@@ -86,7 +86,9 @@ jobs:
       ALLOWED_BOTS: ${{ inputs.allowed_bots || 'dependabot[bot]' }}
       # Workload Identity Federation identifiers come from configuration variables. In a
       # reusable workflow `vars` resolves against the caller's repository and organization,
-      # so each organization points the review at its own federation rule and service account.
+      # so each organization points the review at its own Anthropic organization, federation
+      # rule, and service account.
+      FEDERATION_ORGANIZATION_ID: ${{ vars.FEDERATION_ORGANIZATION_ID }}
       FEDERATION_RULE_ID: ${{ vars.FEDERATION_RULE_ID }}
       FEDERATION_ACCOUNT_ID: ${{ vars.FEDERATION_ACCOUNT_ID }}
     steps:
@@ -94,6 +96,7 @@ jobs:
         shell: bash
         run: |
           missing=()
+          [[ -n "$FEDERATION_ORGANIZATION_ID" ]] || missing+=(FEDERATION_ORGANIZATION_ID)
           [[ -n "$FEDERATION_RULE_ID" ]] || missing+=(FEDERATION_RULE_ID)
           [[ -n "$FEDERATION_ACCOUNT_ID" ]] || missing+=(FEDERATION_ACCOUNT_ID)
           if (( ${#missing[@]} )); then
@@ -389,7 +392,7 @@ jobs:
           # is left to the rule, which must authorize exactly one, so each organization's rule
           # picks its own.
           anthropic_federation_rule_id: ${{ env.FEDERATION_RULE_ID }}
-          anthropic_organization_id: 129ad6b6-9e42-4f3b-ace4-491b511b4e16
+          anthropic_organization_id: ${{ env.FEDERATION_ORGANIZATION_ID }}
           anthropic_service_account_id: ${{ env.FEDERATION_ACCOUNT_ID }}
           allowed_bots: ${{ env.ALLOWED_BOTS }}
           settings: ${{ runner.temp }}/code-review-settings.json
