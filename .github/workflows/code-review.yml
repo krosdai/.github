@@ -385,11 +385,12 @@ jobs:
           # Workload Identity Federation: the action exchanges this job's GitHub OIDC token for a
           # short-lived Claude API access token, so no API key secret is involved. These values are
           # identifiers, not secrets. The federation rule must trust every repository that calls
-          # this workflow, since the OIDC token carries the caller's `repo:` subject.
+          # this workflow, since the OIDC token carries the caller's `repo:` subject. The workspace
+          # is left to the rule, which must authorize exactly one, so each organization's rule
+          # picks its own.
           anthropic_federation_rule_id: ${{ env.FEDERATION_RULE_ID }}
           anthropic_organization_id: 129ad6b6-9e42-4f3b-ace4-491b511b4e16
           anthropic_service_account_id: ${{ env.FEDERATION_ACCOUNT_ID }}
-          anthropic_workspace_id: wrkspc_01Mv6JrzFA2DeSDZviJGbtCh
           allowed_bots: ${{ env.ALLOWED_BOTS }}
           settings: ${{ runner.temp }}/code-review-settings.json
           # Force the action onto the job-scoped GITHUB_TOKEN (contents: read,
