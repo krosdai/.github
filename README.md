@@ -58,11 +58,11 @@ Prerequisites:
 1. Install the [Claude GitHub App](https://github.com/apps/claude)
 2. Keep `id-token: write` in the caller's `permissions`, as above. The review authenticates to the Claude API with [Workload Identity Federation](https://platform.claude.com/docs/en/manage-claude/wif-providers/github-actions): `claude-code-action` exchanges the run's GitHub OIDC token for a short-lived access token, so no `ANTHROPIC_API_KEY` secret is needed.
 3. Make sure the organization's federation rule trusts the calling repository. The OIDC token carries the caller's subject, not this repository's, in one of two formats: `repo:<owner>/<repo>:pull_request`, or GitHub's [immutable format](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims) `repo:<owner>@<owner-id>/<repo>@<repo-id>:pull_request` for repositories created, renamed, or transferred after July 15, 2026. Match on the `repository_owner_id` and `event_name` claims rather than a literal `repo:<owner>/` prefix so both formats pass. A run the rule rejects fails at the token exchange.
-4. Set the `FEDERATION_RULE_ID` (`fdrl_...`) and `FEDERATION_ACCOUNT_ID` (`svac_...`) configuration variables on the calling repository or its organization: the rule that trusts the caller and the service account it targets. A reusable workflow reads the caller's variables, so each organization uses its own rule, and the review fails fast if either is unset. Both are identifiers, not secrets: the exchange succeeds only if the rule's claims match the caller's OIDC token.
+4. Set three configuration variables on the calling repository or its organization: `FEDERATION_ORGANIZATION_ID` (the Anthropic organization UUID), `FEDERATION_RULE_ID` (`fdrl_...`, the rule that trusts the caller), and `FEDERATION_ACCOUNT_ID` (`svac_...`, the service account the rule targets). A reusable workflow reads the caller's variables, so each organization uses its own rule, and the review fails fast if any is unset. All three are identifiers, not secrets: the exchange succeeds only if the rule's claims match the caller's OIDC token. Optionally, set `FEDERATION_WORKSPACE_ID` (`wrkspc_...`) to pick the workspace; leave it unset and the rule decides, which works only when the rule authorizes exactly one workspace. Either way, the service account must be a member of that workspace: enabling a rule for a workspace doesn't add it, and the exchange is rejected without it.
 
 Requests go straight to `https://api.anthropic.com`. An `ANTHROPIC_BASE_URL` variable is ignored, because the federated access token is only valid against the Claude API.
 
-The workflow skips draft PRs and fork PRs, has a 15-minute timeout, and follows the review guidelines defined in [`REVIEW.md`](REVIEW.md).
+The workflow skips draft PRs and fork PRs, has a 30-minute timeout, and follows the review guidelines defined in [`REVIEW.md`](REVIEW.md).
 
 #### Migrating from `@v1`
 
@@ -74,7 +74,7 @@ The workflow skips draft PRs and fork PRs, has a 15-minute timeout, and follows 
 
 Passing an empty string does _not_ disable bot reviews — GitHub expressions treat `''` as falsy, so it falls through to the default. Gate the job in your calling workflow instead.
 
-Unlike `v1`, there is no API key to mirror into the Dependabot secret store: Dependabot-triggered runs read secrets from a separate store, but `v2` reads no secrets at all. The two federation variables are configuration variables, which Dependabot-triggered runs can read today, although GitHub does not document it yet ([github/docs#43950](https://github.com/github/docs/issues/43950)).
+Unlike `v1`, there is no API key to mirror into the Dependabot secret store: Dependabot-triggered runs read secrets from a separate store, but `v2` reads no secrets at all. The federation variables are configuration variables, which Dependabot-triggered runs can read today, although GitHub does not document it yet ([github/docs#43950](https://github.com/github/docs/issues/43950)).
 
 ## Tooling
 
