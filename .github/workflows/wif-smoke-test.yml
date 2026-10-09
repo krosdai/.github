@@ -3,6 +3,7 @@ name: WIF smoke test
 on:
   push:
     branches: [ci/wif-smoke-test]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -36,6 +37,65 @@ jobs:
           claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
           keys = ("iss", "sub", "aud", "repository", "repository_owner", "ref", "event_name")
           print(json.dumps({k: claims.get(k) for k in keys}, indent=2))
+          EOF
+
+      # GitHub OIDC tokens are single-use per exchange, so each diagnostic fetches a fresh one.
+      - name: Exchange token (raw, redacted)
+        run: |
+          FRESH=$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" | jq -r .value)
+          echo "::add-mask::$FRESH"
+          status=$(jq -n --arg a "$FRESH" '{
+              grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+              assertion: $a,
+              federation_rule_id: "fdrl_01BBPmSXaBsAQnwaAZ1Cs4Eg",
+              organization_id: "129ad6b6-9e42-4f3b-ace4-491b511b4e16",
+              service_account_id: "svac_01EZxVahQ3AYDooGEXAsdMTd",
+              workspace_id: "wrkspc_01Mv6JrzFA2DeSDZviJGbtCh"
+            }' | curl -sS -o "$RUNNER_TEMP/exchange.json" -w '%{http_code}' \
+              https://api.anthropic.com/v1/oauth/token -H "content-type: application/json" --data @-)
+          echo "HTTP $status"
+          jq 'with_entries(if (.key | test("token$")) then .value = "<redacted>" else . end)' "$RUNNER_TEMP/exchange.json"
+
+      - name: Check model access
+        run: |
+          pip install --quiet anthropic
+          python - <<'EOF'
+          import json, os, urllib.request
+          import anthropic
+          from anthropic import WorkloadIdentityCredentials
+
+          def fresh_github_oidc_token() -> str:
+              request = urllib.request.Request(
+                  os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"] + "&audience=https://api.anthropic.com",
+                  headers={"Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]},
+              )
+              with urllib.request.urlopen(request) as response:
+                  token = json.load(response)["value"]
+              print(f"::add-mask::{token}", flush=True)
+              return token
+
+          client = anthropic.Anthropic(
+              credentials=WorkloadIdentityCredentials(
+                  identity_token_provider=fresh_github_oidc_token,
+                  federation_rule_id="fdrl_01BBPmSXaBsAQnwaAZ1Cs4Eg",
+                  organization_id="129ad6b6-9e42-4f3b-ace4-491b511b4e16",
+                  service_account_id="svac_01EZxVahQ3AYDooGEXAsdMTd",
+                  workspace_id="wrkspc_01Mv6JrzFA2DeSDZviJGbtCh",
+              ),
+          )
+          for model in ("claude-sonnet-4-6", "claude-opus-5-5"):
+              try:
+                  message = client.messages.create(
+                      model=model,
+                      max_tokens=256,
+                      messages=[{"role": "user", "content": "Reply with OK."}],
+                  )
+                  print(f"{model}: OK (stop_reason={message.stop_reason})")
+              except anthropic.APIStatusError as error:
+                  print(f"{model}: HTTP {error.status_code} {error.body}")
+              except anthropic.APIConnectionError as error:
+                  print(f"{model}: exchange/connection error {error.__cause__!r}")
           EOF
 
       - name: Run WIF snippet
