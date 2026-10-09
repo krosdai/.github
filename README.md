@@ -57,7 +57,7 @@ Prerequisites:
 
 1. Install the [Claude GitHub App](https://github.com/apps/claude)
 2. Keep `id-token: write` in the caller's `permissions`, as above. The review authenticates to the Claude API with [Workload Identity Federation](https://platform.claude.com/docs/en/manage-claude/wif-providers/github-actions): `claude-code-action` exchanges the run's GitHub OIDC token for a short-lived access token, so no `ANTHROPIC_API_KEY` secret is needed.
-3. Make sure the organization's federation rule trusts the calling repository. The OIDC token carries the caller's subject (`repo:<owner>/<repo>:pull_request`), not this repository's, and a run the rule rejects fails at the token exchange.
+3. Make sure the organization's federation rule trusts the calling repository. The OIDC token carries the caller's subject, not this repository's, in one of two formats: `repo:<owner>/<repo>:pull_request`, or GitHub's [immutable format](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims) `repo:<owner>@<owner-id>/<repo>@<repo-id>:pull_request` for repositories created, renamed, or transferred after July 15, 2026. Match on the `repository_owner_id` and `event_name` claims rather than a literal `repo:<owner>/` prefix so both formats pass. A run the rule rejects fails at the token exchange.
 
 Requests go straight to `https://api.anthropic.com`. An `ANTHROPIC_BASE_URL` variable is ignored, because the federated access token is only valid against the Claude API.
 
